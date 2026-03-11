@@ -267,6 +267,15 @@ async function startBot() {
         continue;
       }
 
+      // ── Auto typing indicator ────────────────────────────────────────────
+      if (settings.get("autoTyping")) {
+        await sock.sendPresenceUpdate("composing", from).catch(() => {});
+        if (settings.get("typingDelay")) {
+          // Human-like delay: 600-1800ms random
+          await new Promise(r => setTimeout(r, 600 + Math.floor(Math.random() * 1200)));
+        }
+      }
+
       // ── Auto-reveal view-once ────────────────────────────────────────────
       if (settings.get("voReveal")) {
         const voInner =
@@ -298,6 +307,10 @@ async function startBot() {
       await commands.handle(sock, msg).catch((err) => {
         console.error("Message handler error:", err.message);
       });
+      // Signal end of typing
+      if (settings.get("autoTyping")) {
+        await sock.sendPresenceUpdate("paused", from).catch(() => {});
+      }
     }
   });
 
@@ -394,6 +407,9 @@ async function startBot() {
 
 db.init()
   .then(async () => {
+    // Bootstrap all default settings into the DB so every key is persisted
+    settings.initSettings();
+
     if (process.env.SESSION_ID) {
       const isNexus = process.env.SESSION_ID.startsWith("NEXUS-MD");
       if (isNexus || !fs.existsSync(AUTH_FOLDER)) {
