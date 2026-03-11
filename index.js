@@ -236,10 +236,29 @@ async function startBot() {
       settings.set("autoRecording", true);
       // Send "recording" presence so bot appears active straight away
       setTimeout(async () => {
-        try {
-          await sock.sendPresenceUpdate("available");
-        } catch {}
+        try { await sock.sendPresenceUpdate("available"); } catch {}
       }, 2000);
+
+      // ── Auto-download phonk song for menu if not already set ──────────────
+      if (!settings.getMenuSong()) {
+        setTimeout(async () => {
+          try {
+            console.log("🎵 Downloading menu phonk song: La Minyo Nestra...");
+            const { searchYouTube, downloadAudio } = require("./lib/downloader");
+            const results = await searchYouTube("la minyo nestra phonk");
+            const hit = results[0];
+            if (hit) {
+              const dl = await downloadAudio(hit.url);
+              const buf = require("fs").readFileSync(dl.path);
+              settings.setMenuSong(buf);
+              require("fs").unlinkSync(dl.path);
+              console.log(`✅ Menu song set: ${hit.title}`);
+            }
+          } catch (err) {
+            console.log("⚠️ Could not auto-download menu song:", err.message);
+          }
+        }, 5000);
+      }
 
       // ── Startup alive message → all super-admins ──────────────────────────
       const { admins: adminNums } = require("./config");
@@ -447,24 +466,58 @@ async function startBot() {
       const original = cached.msg;
       const body = original.message?.conversation || original.message?.extendedTextMessage?.text || "";
       const senderPhone = (key.participant || "").split("@")[0];
-      if (body) {
-        await sock.sendMessage(key.remoteJid, {
-          text: `🗑 *Deleted message from @${senderPhone}:*\n\n${body}`,
-          mentions: [key.participant],
-        }).catch(() => {});
-      } else {
-        const msgType = Object.keys(original.message || {})[0];
-        if (msgType === "imageMessage" || msgType === "videoMessage") {
-          try {
-            const mediaBuf = await downloadMediaMessage(original, "buffer", {});
-            const isVideo = msgType === "videoMessage";
-            await sock.sendMessage(key.remoteJid, {
-              [isVideo ? "video" : "image"]: Buffer.from(mediaBuf),
-              caption: `🗑 *Deleted ${isVideo ? "video" : "image"} from @${senderPhone}*`,
-              mentions: [key.participant],
-            }).catch(() => {});
-          } catch {}
+      const deleterJid  = key.participant;
+      const ownerDM     = botPhoneNumber ? `${botPhoneNumber}@s.whatsapp.net` : null;
+
+      // Helper: send the recovered message to a destination JID
+      const sendRecovered = async (destJid, label) => {
+        if (!destJid) return;
+        if (body) {
+          await sock.sendMessage(destJid, {
+            text: `🗑 *${label}*\n\n*From:* @${senderPhone}\n*Text:* ${body}`,
+            mentions: deleterJid ? [deleterJid] : [],
+          }).catch(() => {});
+        } else {
+          const msgType = Object.keys(original.message || {})[0];
+          if (["imageMessage", "videoMessage", "audioMessage", "stickerMessage"].includes(msgType)) {
+            try {
+              const mediaBuf = Buffer.from(await downloadMediaMessage(original, "buffer", {}));
+              const isVideo   = msgType === "videoMessage";
+              const isAudio   = msgType === "audioMessage";
+              const isSticker = msgType === "stickerMessage";
+              if (isSticker) {
+                await sock.sendMessage(destJid, { sticker: mediaBuf }).catch(() => {});
+              } else if (isAudio) {
+                await sock.sendMessage(destJid, {
+                  audio: mediaBuf,
+                  mimetype: original.message.audioMessage?.mimetype || "audio/ogg; codecs=opus",
+                  ptt: original.message.audioMessage?.ptt || false,
+                }).catch(() => {});
+              } else {
+                await sock.sendMessage(destJid, {
+                  [isVideo ? "video" : "image"]: mediaBuf,
+                  caption: `🗑 *${label}*\n*From:* @${senderPhone}`,
+                  ...(isVideo ? { mimetype: "video/mp4" } : {}),
+                }).catch(() => {});
+              }
+            } catch {}
+          }
         }
+      };
+
+      // 1. Post in the group (existing behaviour)
+      await sendRecovered(key.remoteJid, `Deleted message from @${senderPhone}`);
+
+      // 2. Send to bot owner's DM
+      if (ownerDM && ownerDM !== deleterJid) {
+        await sendRecovered(ownerDM, `🔔 Anti-Delete | Group deleted message from +${senderPhone}`);
+      }
+
+      // 3. Send to the deleter's personal DM
+      if (deleterJid && !deleterJid.includes("@g.us")) {
+        await sock.sendMessage(deleterJid, {
+          text: `👀 *Nexus V2 Anti-Delete*\n\nYou deleted a message in a group but we caught it! 😏\n\n_The content has been forwarded to the group and the bot owner._`,
+        }).catch(() => {});
       }
     }
   });
