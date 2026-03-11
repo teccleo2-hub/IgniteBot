@@ -131,6 +131,11 @@ app.get("/api/qr", async (req, res) => {
   }
 });
 
+app.get("/session", (req, res) => {
+  const phone = (req.query.phone || "").replace(/[^0-9]/g, "");
+  res.send(getPairingSite(phone));
+});
+
 app.get("/status", (req, res) => {
   res.json({ status: botStatus, phone: botPhoneNumber, mode: settings.get("mode") });
 });
@@ -510,6 +515,334 @@ function toast(msg) {
   t.textContent = msg; t.style.opacity = '1';
   setTimeout(() => t.style.opacity = '0', 2500);
 }
+</script>
+</body>
+</html>`;
+}
+
+function getPairingSite(prefillPhone = "") {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <title>IgniteBot — Get Session ID</title>
+  <meta name="description" content="Pair your WhatsApp with IgniteBot to get your Session ID"/>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --green:#25D366;--green-dark:#128C7E;--bg:#0a0f14;--surface:#111b21;
+      --card:#182028;--border:#2a3942;--text:#e9edef;--muted:#8696a0;
+    }
+    body{font-family:'Inter',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0}
+
+    /* ── Hero ── */
+    .hero{width:100%;background:linear-gradient(135deg,#0d2818 0%,#0a1a24 50%,#0d1f2d 100%);padding:48px 24px 40px;text-align:center;position:relative;overflow:hidden}
+    .hero::before{content:'';position:absolute;top:-60px;left:50%;transform:translateX(-50%);width:400px;height:400px;background:radial-gradient(circle,rgba(37,211,102,0.12) 0%,transparent 70%);pointer-events:none}
+    .hero-logo{font-size:3.2rem;margin-bottom:8px}
+    .hero-title{font-size:2rem;font-weight:800;color:var(--green);margin-bottom:6px;letter-spacing:-0.5px}
+    .hero-sub{font-size:0.9rem;color:var(--muted);max-width:340px;margin:0 auto 20px;line-height:1.6}
+    .hero-badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:0}
+    .badge{background:rgba(37,211,102,0.1);border:1px solid rgba(37,211,102,0.25);color:var(--green);padding:4px 12px;border-radius:20px;font-size:0.72rem;font-weight:600}
+
+    /* ── Main layout ── */
+    .main{width:100%;max-width:500px;padding:28px 16px 48px}
+
+    /* ── Steps bar ── */
+    .steps-bar{display:flex;justify-content:center;gap:0;margin-bottom:28px}
+    .step-item{display:flex;flex-direction:column;align-items:center;flex:1;position:relative}
+    .step-item:not(:last-child)::after{content:'';position:absolute;top:14px;left:50%;width:100%;height:2px;background:var(--border)}
+    .step-item.active::after,.step-item.done::after{background:var(--green)}
+    .step-num{width:28px;height:28px;border-radius:50%;background:var(--border);color:var(--muted);font-size:0.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;position:relative;z-index:1;transition:all 0.3s}
+    .step-item.active .step-num{background:var(--green);color:#111}
+    .step-item.done .step-num{background:var(--green-dark);color:#fff}
+    .step-item.done .step-num::before{content:'✓';font-size:0.7rem}
+    .step-label{font-size:0.65rem;color:var(--muted);margin-top:5px;text-align:center;font-weight:500}
+    .step-item.active .step-label{color:var(--green)}
+
+    /* ── Card ── */
+    .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:28px;margin-bottom:16px}
+    .card-title{font-size:1rem;font-weight:700;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+    .card-sub{font-size:0.8rem;color:var(--muted);margin-bottom:20px;line-height:1.5}
+
+    /* ── Input group ── */
+    .input-group{position:relative;margin-bottom:14px}
+    .input-prefix{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted);font-size:0.88rem;font-weight:600;pointer-events:none}
+    .phone-input{width:100%;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:13px 14px 13px 42px;color:var(--text);font-size:1rem;outline:none;transition:border-color 0.2s;font-family:'Inter',sans-serif}
+    .phone-input:focus{border-color:var(--green)}
+    .phone-input::placeholder{color:var(--muted)}
+
+    /* ── Buttons ── */
+    .btn-primary{width:100%;background:linear-gradient(135deg,#25D366,#128C7E);color:#fff;border:none;border-radius:10px;padding:14px;font-size:1rem;font-weight:700;cursor:pointer;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:8px;transition:opacity 0.2s}
+    .btn-primary:hover{opacity:0.9}
+    .btn-primary:disabled{opacity:0.5;cursor:not-allowed}
+    .btn-secondary{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:10px;padding:10px 16px;font-size:0.85rem;font-weight:600;cursor:pointer;font-family:'Inter',sans-serif;transition:border-color 0.2s}
+    .btn-secondary:hover{border-color:var(--green);color:var(--green)}
+
+    /* ── Code display ── */
+    .code-panel{display:none;text-align:center;margin-top:16px}
+    .code-label{font-size:0.78rem;color:var(--muted);margin-bottom:10px}
+    .code-display{background:var(--surface);border:2px solid var(--green);border-radius:14px;padding:20px;margin-bottom:12px}
+    .code-value{font-size:3rem;font-weight:900;letter-spacing:12px;color:var(--green);font-family:'Inter',sans-serif;line-height:1}
+    .code-hint{font-size:0.78rem;color:var(--muted);line-height:1.6;margin-top:10px}
+    .code-hint strong{color:var(--text)}
+    .waiting-row{display:flex;align-items:center;gap:8px;justify-content:center;margin-top:12px;font-size:0.82rem;color:var(--muted)}
+    .spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin 0.8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    .error-panel{background:#1a0d0d;border:1px solid #f8514933;border-radius:10px;padding:12px 16px;color:#f85149;font-size:0.84rem;margin-top:12px;display:none}
+
+    /* ── Session ID panel ── */
+    .session-panel{display:none;background:linear-gradient(135deg,#0d2818,#0d1a2a);border:1px solid var(--green);border-radius:18px;padding:24px;margin-bottom:16px}
+    .session-success{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+    .success-icon{width:40px;height:40px;background:var(--green);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0}
+    .session-title{font-size:1rem;font-weight:700;color:var(--green)}
+    .session-desc{font-size:0.78rem;color:var(--muted);margin-top:2px}
+    .session-box-label{font-size:0.75rem;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px}
+    .session-box{background:#060e13;border:1px solid var(--border);border-radius:10px;padding:12px;font-family:monospace;font-size:0.68rem;color:#58a6ff;word-break:break-all;line-height:1.5;min-height:60px;cursor:text;margin-bottom:10px}
+    .copy-row{display:flex;gap:8px}
+    .btn-copy{flex:1;background:var(--green);color:#111;border:none;border-radius:8px;padding:11px;font-weight:700;cursor:pointer;font-size:0.88rem;font-family:'Inter',sans-serif;display:flex;align-items:center;justify-content:center;gap:6px}
+    .heroku-guide{margin-top:16px;background:rgba(31,111,235,0.1);border:1px solid rgba(31,111,235,0.3);border-radius:10px;padding:14px}
+    .heroku-guide-title{font-size:0.8rem;font-weight:700;color:#58a6ff;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+    .heroku-steps{font-size:0.76rem;color:var(--muted);line-height:1.9;counter-reset:s}
+    .heroku-steps li{counter-increment:s;padding-left:4px}
+    .heroku-steps li::marker{color:#58a6ff;font-weight:600}
+    code{background:#1a2332;padding:2px 6px;border-radius:4px;color:#58a6ff;font-family:monospace;font-size:0.72rem}
+
+    /* ── How it works ── */
+    .how-card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px}
+    .how-title{font-size:0.82rem;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:16px}
+    .how-steps{display:flex;flex-direction:column;gap:12px}
+    .how-step{display:flex;gap:12px;align-items:flex-start}
+    .how-num{width:26px;height:26px;background:rgba(37,211,102,0.15);border:1px solid rgba(37,211,102,0.3);border-radius:50%;color:var(--green);font-size:0.72rem;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+    .how-text{font-size:0.82rem;color:var(--muted);line-height:1.5}
+    .how-text strong{color:var(--text)}
+
+    /* ── Footer ── */
+    .footer{text-align:center;padding:20px;font-size:0.75rem;color:var(--muted)}
+    .footer a{color:var(--green);text-decoration:none}
+
+    /* ── Toast ── */
+    .toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);background:var(--green);color:#111;padding:11px 28px;border-radius:24px;font-weight:700;font-size:0.88rem;opacity:0;transition:opacity 0.3s;pointer-events:none;z-index:1000;white-space:nowrap}
+  </style>
+</head>
+<body>
+
+<!-- Hero -->
+<div class="hero">
+  <div class="hero-logo">⚡</div>
+  <div class="hero-title">IgniteBot Session</div>
+  <div class="hero-sub">Pair your WhatsApp number to get your Session ID and keep the bot running 24/7</div>
+  <div class="hero-badges">
+    <span class="badge">🤖 30+ Features</span>
+    <span class="badge">🔒 Secure Pairing</span>
+    <span class="badge">☁️ Heroku Ready</span>
+  </div>
+</div>
+
+<div class="main">
+
+  <!-- Progress steps -->
+  <div class="steps-bar" id="stepsBar">
+    <div class="step-item active" id="step1">
+      <div class="step-num">1</div>
+      <div class="step-label">Phone</div>
+    </div>
+    <div class="step-item" id="step2">
+      <div class="step-num">2</div>
+      <div class="step-label">Code</div>
+    </div>
+    <div class="step-item" id="step3">
+      <div class="step-num">3</div>
+      <div class="step-label">Session</div>
+    </div>
+  </div>
+
+  <!-- Step 1: Enter phone -->
+  <div class="card" id="phoneCard">
+    <div class="card-title">📱 Enter Your Phone Number</div>
+    <div class="card-sub">Use international format without + or spaces. This is the WhatsApp number you want to pair.</div>
+    <div class="input-group">
+      <span class="input-prefix">+</span>
+      <input class="phone-input" type="tel" id="phone" placeholder="12345678901" value="${prefillPhone}" autocomplete="tel"/>
+    </div>
+    <button class="btn-primary" id="getCodeBtn" onclick="getCode()">
+      <span>⚡ Generate Pairing Code</span>
+    </button>
+    <div class="error-panel" id="errorPanel"></div>
+  </div>
+
+  <!-- Step 2: Pairing code -->
+  <div class="code-panel" id="codePanel">
+    <div class="card-title" style="justify-content:center;margin-bottom:6px">🔑 Your Pairing Code</div>
+    <div class="card-sub" style="text-align:center">Open WhatsApp and enter this code to link the bot</div>
+    <div class="code-display">
+      <div class="code-value" id="codeValue"></div>
+    </div>
+    <div class="code-hint">
+      <strong>WhatsApp</strong> → Menu (⋮) → <strong>Linked Devices</strong> → <strong>Link a Device</strong> → <strong>Link with phone number</strong> → enter the code above
+    </div>
+    <div class="waiting-row" id="waitingRow">
+      <div class="spinner"></div>
+      <span>Waiting for you to enter the code in WhatsApp…</span>
+    </div>
+  </div>
+
+  <!-- Step 3: Session ID -->
+  <div class="session-panel" id="sessionPanel">
+    <div class="session-success">
+      <div class="success-icon">✅</div>
+      <div>
+        <div class="session-title">Connected Successfully!</div>
+        <div class="session-desc">Your Session ID is ready. Save it now.</div>
+      </div>
+    </div>
+    <div class="session-box-label">Your Session ID</div>
+    <div class="session-box" id="sessionBox">Loading…</div>
+    <div class="copy-row">
+      <button class="btn-copy" onclick="copySession()">📋 Copy Session ID</button>
+      <button class="btn-secondary" onclick="copyLink()">🔗 Copy Link</button>
+    </div>
+    <div class="heroku-guide">
+      <div class="heroku-guide-title">🚀 Deploy on Heroku</div>
+      <ol class="heroku-steps">
+        <li>Go to Heroku → Your App → <strong>Settings</strong></li>
+        <li>Click <strong>Reveal Config Vars</strong></li>
+        <li>Add key: <code>SESSION_ID</code> — paste the value above</li>
+        <li>Save. Your bot will auto-connect on every restart ✅</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- How it works -->
+  <div class="how-card">
+    <div class="how-title">How it works</div>
+    <div class="how-steps">
+      <div class="how-step">
+        <div class="how-num">1</div>
+        <div class="how-text"><strong>Enter your number</strong> — The bot generates a unique 8-character pairing code for your WhatsApp number</div>
+      </div>
+      <div class="how-step">
+        <div class="how-num">2</div>
+        <div class="how-text"><strong>Enter in WhatsApp</strong> — Go to Linked Devices → Link a Device → Link with phone number, and type the code</div>
+      </div>
+      <div class="how-step">
+        <div class="how-num">3</div>
+        <div class="how-text"><strong>Copy Session ID</strong> — Once connected, copy your Session ID and set it as <code>SESSION_ID</code> in your hosting config vars so the bot stays online</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  Powered by <a href="/">⚡ IgniteBot</a> · <a href="/">Back to Home</a>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let polling = null;
+
+${prefillPhone ? "window.addEventListener('load', () => { document.getElementById('phone').value = '" + prefillPhone + "'; getCode(); });" : ""}
+
+async function getCode() {
+  const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
+  if (!phone) { showError('Please enter a valid phone number'); return; }
+
+  const btn = document.getElementById('getCodeBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="spinner" style="border-color:#ffffff44;border-top-color:#fff"></div><span>Generating…</span>';
+  hideError();
+
+  try {
+    const res = await fetch('/pair', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ phone })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showStep2(data.code);
+    } else {
+      showError(data.error || 'Failed to generate code');
+      btn.disabled = false;
+      btn.innerHTML = '<span>⚡ Generate Pairing Code</span>';
+    }
+  } catch {
+    showError('Network error — make sure the bot is running');
+    btn.disabled = false;
+    btn.innerHTML = '<span>⚡ Generate Pairing Code</span>';
+  }
+}
+
+function showStep2(code) {
+  setStep(2);
+  document.getElementById('codeValue').textContent = code;
+  document.getElementById('codePanel').style.display = 'block';
+  document.getElementById('codePanel').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  startPolling();
+}
+
+function startPolling() {
+  if (polling) clearInterval(polling);
+  polling = setInterval(async () => {
+    try {
+      const r = await fetch('/api/session');
+      const d = await r.json();
+      if (d.connected && d.sessionId) {
+        clearInterval(polling);
+        showStep3(d.sessionId);
+      }
+    } catch {}
+  }, 3000);
+}
+
+function showStep3(sessionId) {
+  setStep(3);
+  document.getElementById('waitingRow').style.display = 'none';
+  const panel = document.getElementById('sessionPanel');
+  panel.style.display = 'block';
+  document.getElementById('sessionBox').textContent = sessionId;
+  panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function setStep(n) {
+  for (let i = 1; i <= 3; i++) {
+    const el = document.getElementById('step' + i);
+    el.className = 'step-item' + (i < n ? ' done' : i === n ? ' active' : '');
+    if (i < n) el.querySelector('.step-num').textContent = '';
+  }
+}
+
+function showError(msg) {
+  const el = document.getElementById('errorPanel');
+  el.textContent = '❌ ' + msg;
+  el.style.display = 'block';
+}
+function hideError() { document.getElementById('errorPanel').style.display = 'none'; }
+
+function copySession() {
+  const text = document.getElementById('sessionBox').textContent;
+  if (!text || text === 'Loading…') return;
+  navigator.clipboard.writeText(text).then(() => toast('✅ Session ID copied!')).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    toast('✅ Session ID copied!');
+  });
+}
+
+function copyLink() {
+  navigator.clipboard.writeText(window.location.origin + '/session').then(() => toast('✅ Link copied!'));
+}
+
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.style.opacity = '1';
+  setTimeout(() => t.style.opacity = '0', 2500);
+}
+
+document.getElementById('phone').addEventListener('keydown', e => { if (e.key === 'Enter') getCode(); });
 </script>
 </body>
 </html>`;
