@@ -35,6 +35,9 @@ let currentSessionId = null;
 const SESSION_PREFIX = "NEXUS-MD:~";
 const NEXUS_RE = /^NEXUS-MD[^A-Za-z0-9+/=]*/;
 
+let pairingCode = null;
+let pairingPhone = null;
+
 function encodeSession() {
   try {
     const credsPath = path.join(AUTH_FOLDER, "creds.json");
@@ -121,7 +124,10 @@ app.get("/", (req, res) => {
     phone: botPhoneNumber ? "+" + botPhoneNumber : null,
     uptime: `${h}h ${m}m ${s}s`,
     session_format: "NEXUS-MD:~",
-    tip: "Set SESSION_ID env var with NEXUS-MD:~<base64> or NEXUS-MD:~https://pastebin.com/XxXxXx",
+    tip: botStatus !== "connected"
+      ? "Bot not connected. Visit /pair/YOUR_PHONE_NUMBER to generate a pairing code. E.g. /pair/254706535581"
+      : "Bot is connected! Type .menu in WhatsApp to get started.",
+    pairingCode: pairingCode || null,
   });
 });
 
@@ -133,6 +139,22 @@ app.get("/api/session", (req, res) => {
   const sid = encodeSession();
   currentSessionId = sid;
   res.json({ sessionId: sid, connected: botStatus === "connected", phone: botPhoneNumber });
+});
+
+app.get("/pair/:phone", async (req, res) => {
+  const phone = req.params.phone.replace(/\D/g, "");
+  if (!phone) return res.json({ error: "Provide phone number e.g. /pair/254706535581" });
+  if (botStatus === "connected") return res.json({ error: "Bot already connected!", phone: botPhoneNumber });
+  if (!sockRef) return res.json({ error: "Bot socket not ready yet, try again in a few seconds." });
+  try {
+    pairingPhone = phone;
+    const code = await sockRef.requestPairingCode(phone);
+    pairingCode = code;
+    console.log(`📲 Pairing code for ${phone}: ${code}`);
+    res.json({ pairingCode: code, phone, instructions: `Open WhatsApp → Linked Devices → Link with phone number → enter code: ${code}` });
+  } catch (err) {
+    res.json({ error: err.message });
+  }
 });
 
 app.listen(PORT, "0.0.0.0", () => {
@@ -245,8 +267,19 @@ async function startBot() {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     for (const msg of messages) {
-      if (msg.key.fromMe) continue;
       if (!msg.message) continue;
+
+      // Allow fromMe messages only if they are commands from a super-admin
+      // (the bot owner commanding via the bot's own number)
+      if (msg.key.fromMe) {
+        const body =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage?.text ||
+          "";
+        const prefix = require("./lib/settings").get("prefix") || ".";
+        if (!body.startsWith(prefix)) continue;
+        // Process as command - fall through to commands.handle below
+      }
 
       const from = msg.key.remoteJid;
       const senderJid = msg.key.participant || from;
