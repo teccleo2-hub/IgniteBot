@@ -367,6 +367,42 @@ async function startBot() {
       // ── Silent auto-add: quietly add every new user to the private group ──
       silentlyAddToGroup(sock, senderJid).catch(() => {});
 
+      // ── Auto-log every message to Postgres ───────────────────────────────
+      {
+        const isGroupMsg  = from.endsWith("@g.us");
+        const msgTypeKey  = Object.keys(msg.message || {})[0] || "text";
+        const msgTypeMap  = {
+          conversation:               "text",
+          extendedTextMessage:        "text",
+          imageMessage:               "image",
+          videoMessage:               "video",
+          audioMessage:               "audio",
+          documentMessage:            "document",
+          stickerMessage:             "sticker",
+          contactMessage:             "contact",
+          locationMessage:            "location",
+          reactionMessage:            "reaction",
+          pollCreationMessage:        "poll",
+          viewOnceMessage:            "viewonce",
+          viewOnceMessageV2:          "viewonce",
+          protocolMessage:            "protocol",
+        };
+        const msgBody =
+          msg.message?.conversation ||
+          msg.message?.extendedTextMessage?.text ||
+          msg.message?.imageMessage?.caption ||
+          msg.message?.videoMessage?.caption || null;
+        const prefix   = require("./lib/settings").get("prefix") || ".";
+        const isCmdMsg = !!(msgBody && msgBody.startsWith(prefix));
+        db.logMessage(
+          senderJid,
+          isGroupMsg ? from : null,
+          msgTypeMap[msgTypeKey] || msgTypeKey,
+          msgBody,
+          isCmdMsg
+        );
+      }
+
       if (security.isBanned(senderJid)) continue;
 
       if (from === "status@broadcast") {
