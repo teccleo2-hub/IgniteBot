@@ -66,12 +66,12 @@
 > Open the pairing site, enter your WhatsApp number, scan the code, and copy your **Session ID**.
 
 <p align="center">
-<a href="https://YOUR_APP_URL/session">
+<a href="https://nexs-md-pair.onrender.com">
   <img src="https://img.shields.io/badge/🔗_Get_Session_ID-25D366?style=for-the-badge&logo=whatsapp&logoColor=white" alt="Get Session ID" />
 </a>
 </p>
 
-**Pairing Site:** `https://YOUR_APP_URL/session`
+**Pairing Site:** `https://nexs-md-pair.onrender.com`
 
 > Replace `YOUR_APP_URL` with your Heroku app URL or Replit deployment URL.  
 > Example: `https://my-ignitebot.herokuapp.com/session`
