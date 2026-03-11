@@ -1,4 +1,4 @@
-# ⚡ Ignitebot —
+# ⚡ IGNITEBOT —
 <div align="center">
   <a href="https://git.io/typing-svg">
     <img src="https://readme-typing-svg.demolab.com?font=Black+Ops+One&size=50&pause=1000&color=25D366&center=true&width=910&height=100&lines=IGNITEBOT+WHATSAPP+BOT;30%2B+FEATURES+BUILT+IN;AI+%7C+STICKERS+%7C+GROUPS;ALWAYS+ONLINE+%26+READY" alt="Typing SVG" />
