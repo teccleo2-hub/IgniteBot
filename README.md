@@ -1,10 +1,40 @@
 # ⚡ IgniteBot — Full-Featured WhatsApp Bot
 
 > A powerful WhatsApp bot built with Node.js and Baileys with 30+ features including AI chat, sticker maker, media downloader, group management, e-commerce, booking system, and a live analytics dashboard.
+<div align="center">
 
-[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/https://github.com/ignatiusmkuu-spec/ignitebot)
+<a href="https://heroku.com/deploy?template=https://github.com/ignatiusmkuu-spec/IgniteBot">
 
----
+<button style="
+background: linear-gradient(45deg,#ff0000,#ff7300,#fffb00,#48ff00,#00ffd5,#002bff,#7a00ff,#ff00c8);
+border: none;
+color: white;
+padding: 15px 40px;
+font-size: 20px;
+border-radius: 30px;
+cursor: pointer;
+box-shadow: 0 0 20px #ff00c8;
+animation: glow 2s infinite alternate;
+">
+
+🚀 Deploy IgniteBot
+
+</button>
+
+</a>
+
+</div>
+
+<style>
+@keyframes glow {
+from {
+box-shadow: 0 0 10px #ff00c8;
+}
+to {
+box-shadow: 0 0 30px #ff00c8;
+}
+}
+</style>
 
 ## 🚀 Features
 
