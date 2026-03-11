@@ -35,6 +35,7 @@ let alwaysOnlineInterval = null;
 let currentSessionId = null;
 
 const SESSION_PREFIX = "NEXUS-MD:~";
+const NEXUS_RE = /^NEXUS-MD[^A-Za-z0-9+/]*/;
 
 function encodeSession() {
   try {
@@ -51,11 +52,11 @@ function restoreSession(sessionId) {
   try {
     fs.mkdirSync(AUTH_FOLDER, { recursive: true });
 
-    // NEXUS-MD:~ format — base64 of creds.json content
-    if (sessionId.startsWith(SESSION_PREFIX)) {
-      const b64 = sessionId.slice(SESSION_PREFIX.length);
+    // Any NEXUS-MD prefix (NEXUS-MD:~, NEXUS-MD::, NEXUS-MD: etc.)
+    if (sessionId.startsWith("NEXUS-MD")) {
+      const b64 = sessionId.replace(NEXUS_RE, "");
       const creds = Buffer.from(b64, "base64").toString("utf8");
-      JSON.parse(creds); // validate it's real JSON before writing
+      JSON.parse(creds); // validate JSON before writing
       fs.writeFileSync(path.join(AUTH_FOLDER, "creds.json"), creds);
       console.log("✅ Session restored from NEXUS-MD session ID");
       return true;
@@ -76,9 +77,14 @@ function restoreSession(sessionId) {
   }
 }
 
-if (process.env.SESSION_ID && !fs.existsSync(AUTH_FOLDER)) {
-  console.log("📦 Restoring WhatsApp session from SESSION_ID...");
-  restoreSession(process.env.SESSION_ID);
+// Always restore NEXUS-MD sessions (overwrite existing auth to stay fresh)
+// For other formats, only restore if auth folder is missing
+if (process.env.SESSION_ID) {
+  const isNexus = process.env.SESSION_ID.startsWith("NEXUS-MD");
+  if (isNexus || !fs.existsSync(AUTH_FOLDER)) {
+    console.log("📦 Restoring WhatsApp session from SESSION_ID...");
+    restoreSession(process.env.SESSION_ID);
+  }
 }
 
 app.use(express.json());
