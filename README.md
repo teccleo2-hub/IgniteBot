@@ -56,7 +56,7 @@
 ### Step 1 — Fork this repo
 
 <p align="center">
-<a href="https://github.com/Ignatiusperez/Perez/fork"><img src="https://img.shields.io/badge/Fork%20Repo-6f42c1?style=for-the-badge&logo=github&logoColor=white" alt="Fork" width="160"></a>
+<a href="https://github.com/ignatiusmkuu-spec/IgniteBot/fork"><img src="https://img.shields.io/badge/Fork%20Repo-6f42c1?style=for-the-badge&logo=github&logoColor=white" alt="Fork" width="160"></a>
 </p>
 
 ---
