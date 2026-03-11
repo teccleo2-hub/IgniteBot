@@ -34,25 +34,14 @@ let sockRef = null;
 let alwaysOnlineInterval = null;
 let currentSessionId = null;
 
+const SESSION_PREFIX = "NEXUS-MD:~";
+
 function encodeSession() {
   try {
-    if (!fs.existsSync(AUTH_FOLDER)) return null;
-    const files = {};
-    function readDir(dir, prefix) {
-      for (const item of fs.readdirSync(dir)) {
-        const full = path.join(dir, item);
-        const key = prefix ? `${prefix}/${item}` : item;
-        const stat = fs.statSync(full);
-        if (stat.isFile()) {
-          files[key] = fs.readFileSync(full).toString("base64");
-        } else if (stat.isDirectory()) {
-          readDir(full, key);
-        }
-      }
-    }
-    readDir(AUTH_FOLDER, "");
-    if (!Object.keys(files).length) return null;
-    return Buffer.from(JSON.stringify(files)).toString("base64");
+    const credsPath = path.join(AUTH_FOLDER, "creds.json");
+    if (!fs.existsSync(credsPath)) return null;
+    const creds = fs.readFileSync(credsPath, "utf8");
+    return SESSION_PREFIX + Buffer.from(creds).toString("base64");
   } catch {
     return null;
   }
@@ -61,13 +50,25 @@ function encodeSession() {
 function restoreSession(sessionId) {
   try {
     fs.mkdirSync(AUTH_FOLDER, { recursive: true });
+
+    // NEXUS-MD:~ format — base64 of creds.json content
+    if (sessionId.startsWith(SESSION_PREFIX)) {
+      const b64 = sessionId.slice(SESSION_PREFIX.length);
+      const creds = Buffer.from(b64, "base64").toString("utf8");
+      JSON.parse(creds); // validate it's real JSON before writing
+      fs.writeFileSync(path.join(AUTH_FOLDER, "creds.json"), creds);
+      console.log("✅ Session restored from NEXUS-MD session ID");
+      return true;
+    }
+
+    // Legacy multi-file format — base64 of { filename: base64content }
     const files = JSON.parse(Buffer.from(sessionId, "base64").toString("utf8"));
     for (const [name, content] of Object.entries(files)) {
       const filePath = path.join(AUTH_FOLDER, name);
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, Buffer.from(content, "base64"));
     }
-    console.log("✅ Session restored from SESSION_ID");
+    console.log("✅ Session restored from legacy SESSION_ID");
     return true;
   } catch (err) {
     console.error("❌ Failed to restore session:", err.message);
