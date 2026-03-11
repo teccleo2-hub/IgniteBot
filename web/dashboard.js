@@ -9,10 +9,10 @@ router.get("/dashboard", (req, res) => {
   res.send(getDashboardHTML());
 });
 
-router.get("/api/stats", (req, res) => {
-  const stats = analytics.getStats();
-  const topCommands = analytics.getTopCommands(10);
-  const hourly = analytics.getHourlyChart();
+router.get("/api/stats", async (req, res) => {
+  const stats = await analytics.getStats();
+  const topCommands = await analytics.getTopCommands(10);
+  const hourly = await analytics.getHourlyChart();
   res.json({ stats, topCommands, hourly });
 });
 

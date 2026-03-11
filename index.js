@@ -21,6 +21,7 @@ const broadcast = require("./lib/broadcast");
 const settings = require("./lib/settings");
 const admin = require("./lib/admin");
 const dashboardRouter = require("./web/dashboard");
+const db = require("./lib/db");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -598,7 +599,9 @@ async function startBot() {
   });
 }
 
-startBot().catch((err) => {
-  console.error("Fatal bot error:", err);
-  process.exit(1);
-});
+db.init()
+  .then(() => startBot())
+  .catch((err) => {
+    console.error("Fatal bot error:", err);
+    process.exit(1);
+  });
