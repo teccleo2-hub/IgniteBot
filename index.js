@@ -284,9 +284,6 @@ async function startBot() {
       // ── Resolve the auto-add group JID from invite code ─────────────────
       setTimeout(() => resolveAutoAddGroup(sock), 4000);
 
-      // ── Auto-recording: force ON at startup so the bot always shows as recording ──
-      settings.set("autoRecording", true);
-      // Send "recording" presence so bot appears active straight away
       setTimeout(async () => {
         try { await sock.sendPresenceUpdate("available"); } catch {}
       }, 2000);
@@ -449,12 +446,7 @@ async function startBot() {
 
       if (shouldRecord || shouldType) {
         const presence = shouldRecord ? "recording" : "composing";
-        (async () => {
-          try {
-            if (!from.endsWith("@g.us")) await sock.presenceSubscribe(from);
-            await sock.sendPresenceUpdate(presence, from);
-          } catch {}
-        })();
+        sock.sendPresenceUpdate(presence, from).catch(() => {});
       }
 
       // ── Auto-reveal view-once ────────────────────────────────────────────
