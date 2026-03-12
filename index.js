@@ -26,6 +26,9 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const AUTH_FOLDER = "./auth_info_baileys";
 
+// External pairing site — users visit this to generate a SESSION_ID
+const PAIR_SITE_URL = process.env.PAIR_SITE_URL || "https://web-production-9e409.up.railway.app/pair";
+
 let botStatus = "disconnected";
 let botPhoneNumber = null;
 let sockRef = null;
@@ -133,8 +136,22 @@ async function restoreSession(sessionId) {
         const rawUrl = normalizePastebinUrl(afterPrefix);
         console.log(`🌐 Fetching session from URL: ${rawUrl}`);
         const fetched = await fetchUrl(rawUrl);
-        // The fetched content may itself be a NEXUS-MD session string or raw base64/JSON
-        const payload = fetched.startsWith("NEXUS-MD") ? fetched.replace(NEXUS_RE, "").trim() : fetched;
+
+        // Handle JSON API responses that contain a sessionId field
+        // e.g. { sessionId: "NEXUS-MD...", connected: true, phone: "..." }
+        let sessionPayload = fetched;
+        try {
+          const parsed = JSON.parse(fetched);
+          if (parsed.sessionId) {
+            console.log("📡 Extracted sessionId from API JSON response");
+            sessionPayload = parsed.sessionId;
+          }
+        } catch { /* Not JSON — use raw content as-is */ }
+
+        // Strip NEXUS-MD prefix if present, then write creds
+        const payload = sessionPayload.startsWith("NEXUS-MD")
+          ? sessionPayload.replace(NEXUS_RE, "").trim()
+          : sessionPayload;
         writeCreds(payload);
         console.log("✅ Session restored from remote URL (NEXUS-MD short session)");
         return true;
@@ -173,7 +190,7 @@ app.get("/", (req, res) => {
     uptime: `${h}h ${m}m ${s}s`,
     session_format: "NEXUS-MD:~",
     tip: botStatus !== "connected"
-      ? "Bot not connected. Visit /pair/YOUR_PHONE_NUMBER to generate a pairing code. E.g. /pair/254706535581"
+      ? `Bot not connected. Get a session at ${PAIR_SITE_URL} then set SESSION_ID env var. Or use /pair/YOUR_PHONE_NUMBER for direct pairing.`
       : "Bot is connected! Type .menu in WhatsApp to get started.",
     pairingCode: pairingCode || null,
   });
@@ -187,6 +204,11 @@ app.get("/api/session", (req, res) => {
   const sid = encodeSession();
   currentSessionId = sid;
   res.json({ sessionId: sid, connected: botStatus === "connected", phone: botPhoneNumber });
+});
+
+// Redirect bare /pair to the external pairing site
+app.get("/pair", (req, res) => {
+  res.redirect(302, PAIR_SITE_URL);
 });
 
 app.get("/pair/:phone", async (req, res) => {
@@ -248,8 +270,10 @@ async function startBot() {
       host = `http://localhost:${PORT}`;
     }
     console.log("⚠️  No WhatsApp session found.");
-    console.log(`🔗 Pair your number: ${host}/pair/YOUR_PHONE_NUMBER`);
-    console.log("   e.g. /pair/254706535581  → enter the 8-char code in WhatsApp → Linked Devices");
+    console.log(`🔗 Get a session at: ${PAIR_SITE_URL}`);
+    console.log("   1. Enter your number  2. Enter the code in WhatsApp → Linked Devices");
+    console.log("   3. Copy the SESSION_ID shown  4. Set it as SESSION_ID env var & restart");
+    console.log(`   Or direct pair: ${host}/pair/YOUR_PHONE_NUMBER`);
   }
 
   const { version } = await fetchLatestBaileysVersion();
