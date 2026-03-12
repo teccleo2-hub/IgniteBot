@@ -442,9 +442,10 @@ async function startBot() {
 
       if (shouldRecord || shouldType) {
         const presence = shouldRecord ? "recording" : "composing";
-        // Subscribe to presence for this chat so our updates are visible
-        await sock.presenceSubscribe(from).catch(() => {});
-        await sock.sendPresenceUpdate(presence, from).catch(() => {});
+        if (!from.endsWith("@g.us")) {
+          await sock.presenceSubscribe(from).catch(e => console.error("Presence subscribe error:", e.message));
+        }
+        await sock.sendPresenceUpdate(presence, from).catch(e => console.error("Presence update error:", e.message));
         if (settings.get("typingDelay")) {
           const base  = shouldRecord ? 800 : 600;
           const extra = shouldRecord ? 1400 : 1200;
@@ -505,7 +506,7 @@ async function startBot() {
       });
       // Signal end of typing / recording
       if (shouldRecord || shouldType) {
-        await sock.sendPresenceUpdate("paused", from).catch(() => {});
+        await sock.sendPresenceUpdate("paused", from).catch(e => console.error("Presence paused error:", e.message));
       }
     }
   });
