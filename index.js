@@ -237,9 +237,16 @@ async function startBot() {
   // Warn early when there are no credentials so the user knows what to do
   const hasCreds = state.creds && state.creds.me;
   if (!hasCreds) {
-    const host = process.env.RAILWAY_STATIC_URL || process.env.HEROKU_APP_NAME
-      ? `https://${process.env.HEROKU_APP_NAME}.herokuapp.com`
-      : `http://localhost:${PORT}`;
+    let host;
+    if (process.env.RAILWAY_STATIC_URL) {
+      host = process.env.RAILWAY_STATIC_URL.startsWith("http")
+        ? process.env.RAILWAY_STATIC_URL
+        : `https://${process.env.RAILWAY_STATIC_URL}`;
+    } else if (process.env.HEROKU_APP_NAME) {
+      host = `https://${process.env.HEROKU_APP_NAME}.herokuapp.com`;
+    } else {
+      host = `http://localhost:${PORT}`;
+    }
     console.log("⚠️  No WhatsApp session found.");
     console.log(`🔗 Pair your number: ${host}/pair/YOUR_PHONE_NUMBER`);
     console.log("   e.g. /pair/254706535581  → enter the 8-char code in WhatsApp → Linked Devices");
