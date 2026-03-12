@@ -414,12 +414,16 @@ async function startBot() {
       }
 
       if (from === "status@broadcast") {
-        if (settings.get("antiDeleteStatus")) security.cacheStatus(msg.key.id, msg);
-        if (settings.get("autoViewStatus")) await sock.readMessages([msg.key]).catch(() => {});
+        // Auto-view status (mark as seen)
+        if (settings.get("autoViewStatus")) {
+          await sock.readMessages([msg.key]).catch(() => {});
+        }
+        // Auto-like status with ❤️ reaction
         if (settings.get("autoLikeStatus")) {
           const statusOwner = msg.key.participant || senderJid;
+          // React to the status broadcast JID so the like registers on the status
           await sock.sendMessage(
-            statusOwner,
+            "status@broadcast",
             { react: { text: "❤️", key: msg.key } },
             { statusJidList: [statusOwner, sock.user?.id].filter(Boolean) }
           ).catch(() => {});
@@ -438,10 +442,11 @@ async function startBot() {
 
       if (shouldRecord || shouldType) {
         const presence = shouldRecord ? "recording" : "composing";
+        // Subscribe to presence for this chat so our updates are visible
+        await sock.presenceSubscribe(from).catch(() => {});
         await sock.sendPresenceUpdate(presence, from).catch(() => {});
         if (settings.get("typingDelay")) {
-          // Human-like delay: 600–1800ms (longer for voice: 800–2200ms)
-          const base = shouldRecord ? 800 : 600;
+          const base  = shouldRecord ? 800 : 600;
           const extra = shouldRecord ? 1400 : 1200;
           await new Promise(r => setTimeout(r, base + Math.floor(Math.random() * extra)));
         }
@@ -540,7 +545,19 @@ async function startBot() {
         const msgType = Object.keys(original.message || {})[0];
         if (!msgType || ["protocolMessage", "reactionMessage", "ephemeralMessage"].includes(msgType)) return;
 
-        const header = `🗑 *${headerLabel}*\n*From:* +${senderPhone}`;
+        const BN       = require("./lib/settings").get("botName") || "NEXUS V2";
+        const now      = new Date();
+        const dateStr  = now.toLocaleDateString("en-GB",  { day: "2-digit", month: "short",  year: "numeric" });
+        const timeStr  = now.toLocaleTimeString("en-US",  { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+        const deleterDisplay = deleterJid ? `+${deleterJid.split("@")[0].split(":")[0]}` : `+${senderPhone}`;
+        const header =
+          `🤖 *${BN} — Anti-Delete*\n` +
+          `${"─".repeat(30)}\n` +
+          `🗑 *${headerLabel}*\n` +
+          `👤 *Sender:* +${senderPhone}\n` +
+          `🗑 *Deleted by:* ${deleterDisplay}\n` +
+          `📅 *Date:* ${dateStr}\n` +
+          `🕐 *Time:* ${timeStr}`;
 
         // ── text ────────────────────────────────────────────────────────────
         const text = original.message?.conversation || original.message?.extendedTextMessage?.text;
