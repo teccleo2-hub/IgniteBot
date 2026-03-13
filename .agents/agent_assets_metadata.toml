@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "GkZc9cru-fGmrYkvenA5f"
+uri = "file://README.md"
+type = "text"
+title = "NEXUS-MD README.md"
