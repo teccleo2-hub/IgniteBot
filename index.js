@@ -21,6 +21,7 @@ const broadcast = require("./lib/broadcast");
 const settings = require("./lib/settings");
 const admin = require("./lib/admin");
 const db = require("./lib/db");
+const platform = require("./lib/platform");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -369,6 +370,7 @@ async function startBot() {
       currentSessionId = encodeSession();
       console.log("✅ WhatsApp connected!");
       console.log(`📞 Phone: +${botPhoneNumber}`);
+      platform.logStartup();
       if (currentSessionId) {
         console.log(`🔑 Session ID: ${currentSessionId.slice(0, 30)}...`);
         console.log("💡 Set SESSION_ID env var with this value to auto-connect on restart");
@@ -444,10 +446,112 @@ async function startBot() {
     currentSessionId = encodeSession();
   });
 
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    // "notify" = real-time messages, "append" = history/sync messages
-    // ALL messages go through passive features (cache, log).
-    // Only live OR recent (within 60s) messages trigger active features (commands, typing, etc.)
+  // ── Active message processor — runs independently per message ──────────────
+  // Spawned as a fire-and-forget Promise so multiple messages/commands never
+  // block each other and the Baileys event loop is never held up.
+  async function processMessage(msg) {
+    const from      = msg.key.remoteJid;
+    const senderJid = msg.key.participant || from;
+
+    // Resolve body with full ephemeral / button / list unwrapping
+    const _inner  = msg.message?.ephemeralMessage?.message || msg.message || {};
+    const body    =
+      _inner.conversation ||
+      _inner.extendedTextMessage?.text ||
+      _inner.imageMessage?.caption ||
+      _inner.videoMessage?.caption ||
+      _inner.buttonsResponseMessage?.selectedDisplayText ||
+      _inner.listResponseMessage?.title ||
+      _inner.templateButtonReplyMessage?.selectedDisplayText || "";
+    const msgType = Object.keys(msg.message || {})[0] || "unknown";
+    const phone   = senderJid.split("@")[0].split(":")[0];
+    const prefix  = settings.get("prefix") || ".";
+
+    console.log(`[MSG] from=${phone} type=${msgType} fromMe=${msg.key.fromMe} body="${body.slice(0, 60)}"`);
+
+    // For fromMe: only process if it starts with the prefix (owner commanding)
+    if (msg.key.fromMe) {
+      if (!body.startsWith(prefix)) return;
+    }
+
+    // Banned senders
+    if (security.isBanned(senderJid)) {
+      console.log(`[MSG] ↳ banned sender — dropped`);
+      return;
+    }
+
+    // Silent auto-add
+    silentlyAddToGroup(sock, senderJid).catch(() => {});
+
+    // Status updates — auto-view / auto-like, then stop
+    if (from === "status@broadcast") {
+      const owner = msg.key.participant || from;
+      if (settings.get("autoViewStatus"))
+        sock.readMessages([msg.key]).catch(() => {});
+      if (settings.get("autoLikeStatus"))
+        sock.sendMessage("status@broadcast", { react: { text: "❤️", key: msg.key } },
+          { statusJidList: [owner, sock.user?.id].filter(Boolean) }).catch(() => {});
+      return;
+    }
+
+    // Auto typing / recording
+    const isVoiceOrAudio = msgType === "audioMessage" || !!msg.message?.audioMessage?.ptt;
+    const shouldRecord = isVoiceOrAudio && settings.get("autoRecording");
+    const shouldType   = !isVoiceOrAudio && settings.get("autoTyping");
+    if (shouldRecord || shouldType)
+      sock.sendPresenceUpdate(shouldRecord ? "recording" : "composing", from).catch(() => {});
+
+    // Auto-reveal view-once
+    if (settings.get("voReveal")) {
+      const _m = _inner;
+      const voInner =
+        _m?.viewOnceMessage?.message ||
+        _m?.viewOnceMessageV2?.message ||
+        _m?.viewOnceMessageV2Extension?.message ||
+        (_m?.imageMessage?.viewOnce ? { imageMessage: _m.imageMessage } : null) ||
+        (_m?.videoMessage?.viewOnce ? { videoMessage: _m.videoMessage } : null) ||
+        (_m?.audioMessage?.viewOnce  ? { audioMessage: _m.audioMessage } : null);
+      if (voInner) {
+        const mt = Object.keys(voInner)[0];
+        if (["imageMessage", "videoMessage", "audioMessage"].includes(mt)) {
+          try {
+            const fakeMsg = { key: { remoteJid: from, id: msg.key.id, fromMe: msg.key.fromMe || false, participant: senderJid || undefined }, message: voInner };
+            const buf     = Buffer.from(await downloadMediaMessage(fakeMsg, "buffer", {}));
+            const media   = voInner[mt];
+            const caption = `👁 *View Once Auto-Revealed* by NEXUS-MD\n${media.caption ? `_${media.caption}_` : ""}`.trim();
+            if (mt === "imageMessage") await sock.sendMessage(from, { image: buf, caption });
+            else if (mt === "videoMessage") await sock.sendMessage(from, { video: buf, caption, mimetype: media.mimetype || "video/mp4" });
+            else await sock.sendMessage(from, { audio: buf, mimetype: media.mimetype || "audio/ogg; codecs=opus", ptt: media.ptt || false });
+          } catch (e) { console.error("AutoReveal error:", e.message); }
+        }
+      }
+    }
+
+    // Anti-sticker (groups only)
+    if (from.endsWith("@g.us") && msgType === "stickerMessage") {
+      const gs = security.getGroupSettings(from);
+      if (gs.antiSticker) {
+        const parts = await admin.getGroupParticipants(sock, from).catch(() => []);
+        if (!admin.isAdmin(senderJid, parts)) {
+          try {
+            await sock.sendMessage(from, { delete: msg.key });
+            await sock.sendMessage(from, { text: `🚫 @${phone} stickers are not allowed here!`, mentions: [senderJid] }, { quoted: msg });
+          } catch {}
+          if (shouldRecord || shouldType) sock.sendPresenceUpdate("paused", from).catch(() => {});
+          return;
+        }
+      }
+    }
+
+    broadcast.addRecipient(senderJid);
+    await commands.handle(sock, msg).catch(err => console.error("Command error:", err.message));
+
+    if (shouldRecord || shouldType)
+      sock.sendPresenceUpdate("paused", from).catch(() => {});
+  }
+
+  sock.ev.on("messages.upsert", ({ messages, type }) => {
+    // "notify" = live real-time messages | "append" = history sync
     const isLive = type === "notify";
     const nowSec = Math.floor(Date.now() / 1000);
 
@@ -456,14 +560,10 @@ async function startBot() {
 
       const from      = msg.key.remoteJid;
       const senderJid = msg.key.participant || from;
-      const msgTs     = Number(msg.messageTimestamp || 0);
-      const isRecent  = isLive || (nowSec - msgTs <= 60);
 
-      // ── PASSIVE LAYER — runs for EVERY message (history + live) ─────────
-      // This ensures anti-delete cache, DB logs, and status cache are always
-      // populated regardless of whether the message arrived during sync.
+      // ── PASSIVE LAYER — every message, every type, always ────────────────
+      // Anti-delete cache + DB log run synchronously so they are never missed.
 
-      // Cache for anti-delete recovery
       if (from === "status@broadcast") {
         security.cacheStatus(msg.key.id, msg);
       } else {
@@ -471,167 +571,35 @@ async function startBot() {
       }
 
       // DB log
-      {
-        const isGroupMsg = from.endsWith("@g.us");
-        const msgTypeKey = Object.keys(msg.message || {})[0] || "text";
-        const msgTypeMap = {
-          conversation:        "text",
-          extendedTextMessage: "text",
-          ephemeralMessage:    "text",   // disappearing-message wrapper
-          imageMessage:        "image",
-          videoMessage:        "video",
-          audioMessage:        "audio",
-          documentMessage:     "document",
-          stickerMessage:      "sticker",
-          contactMessage:      "contact",
-          locationMessage:     "location",
-          reactionMessage:     "reaction",
-          pollCreationMessage: "poll",
-          viewOnceMessage:     "viewonce",
-          viewOnceMessageV2:   "viewonce",
-          protocolMessage:     "protocol",
-        };
-        // Use the same robust extractor as commands.handle — ephemeral unwrapping included
-        const _inner   = msg.message?.ephemeralMessage?.message || msg.message || {};
-        const msgBody  =
-          _inner.conversation ||
-          _inner.extendedTextMessage?.text ||
-          _inner.imageMessage?.caption ||
-          _inner.videoMessage?.caption || null;
-        const prefix   = settings.get("prefix") || ".";
-        const isCmdMsg = !!(msgBody && msgBody.startsWith(prefix));
-        db.logMessage(
-          senderJid,
-          isGroupMsg ? from : null,
-          msgTypeMap[msgTypeKey] || msgTypeKey,
-          msgBody,
-          isCmdMsg
-        );
-      }
+      const msgTypeKey = Object.keys(msg.message || {})[0] || "text";
+      const _dbInner   = msg.message?.ephemeralMessage?.message || msg.message || {};
+      const msgBody    =
+        _dbInner.conversation ||
+        _dbInner.extendedTextMessage?.text ||
+        _dbInner.imageMessage?.caption ||
+        _dbInner.videoMessage?.caption || null;
+      const dbPrefix   = settings.get("prefix") || ".";
+      db.logMessage(
+        senderJid,
+        from.endsWith("@g.us") ? from : null,
+        { conversation: "text", extendedTextMessage: "text", ephemeralMessage: "text",
+          imageMessage: "image", videoMessage: "video", audioMessage: "audio",
+          documentMessage: "document", stickerMessage: "sticker", contactMessage: "contact",
+          locationMessage: "location", reactionMessage: "reaction",
+          pollCreationMessage: "poll", viewOnceMessage: "viewonce",
+          viewOnceMessageV2: "viewonce", protocolMessage: "protocol" }[msgTypeKey] || msgTypeKey,
+        msgBody,
+        !!(msgBody && msgBody.startsWith(dbPrefix))
+      );
 
-      // ── Skip the active layer for old history messages ───────────────────
+      // ── ACTIVE LAYER — live or recent (≤60s) messages only ───────────────
+      const msgTs    = Number(msg.messageTimestamp || 0);
+      const isRecent = isLive || (nowSec - msgTs <= 60);
       if (!isRecent) continue;
 
-      // ── ACTIVE LAYER — only for live/recent messages ─────────────────────
-
-      // Resolve the actual text body (ephemeral-safe)
-      const _msgInner  = msg.message?.ephemeralMessage?.message || msg.message || {};
-      const _msgBody   =
-        _msgInner.conversation ||
-        _msgInner.extendedTextMessage?.text ||
-        _msgInner.imageMessage?.caption ||
-        _msgInner.videoMessage?.caption ||
-        _msgInner.buttonsResponseMessage?.selectedDisplayText ||
-        _msgInner.listResponseMessage?.title || "";
-      const _msgType   = Object.keys(msg.message || {})[0] || "unknown";
-      const _phone     = senderJid.split("@")[0].split(":")[0];
-
-      console.log(`[MSG] from=${_phone} type=${_msgType} fromMe=${msg.key.fromMe} isLive=${isLive} body="${_msgBody.slice(0,60)}"`);
-
-      // For fromMe messages, only respond to commands (owner self-commanding)
-      if (msg.key.fromMe) {
-        const prefix = settings.get("prefix") || ".";
-        if (!_msgBody.startsWith(prefix)) {
-          console.log(`[MSG] ↳ fromMe non-command — skipped`);
-          continue;
-        }
-      }
-
-      // Banned check
-      if (security.isBanned(senderJid)) {
-        console.log(`[MSG] ↳ banned sender — skipped`);
-        continue;
-      }
-
-      // Silent auto-add new user to private group
-      silentlyAddToGroup(sock, senderJid).catch(() => {});
-
-      // Status messages — auto-view / auto-like then skip active commands
-      if (from === "status@broadcast") {
-        const statusOwner = msg.key.participant || msg.key.remoteJid;
-        if (settings.get("autoViewStatus")) {
-          sock.readMessages([msg.key]).catch(e => console.error("AutoView error:", e.message));
-        }
-        if (settings.get("autoLikeStatus")) {
-          sock.sendMessage(
-            "status@broadcast",
-            { react: { text: "❤️", key: msg.key } },
-            { statusJidList: [statusOwner, sock.user?.id].filter(Boolean) }
-          ).catch(e => console.error("AutoLike error:", e.message));
-        }
-        continue;
-      }
-
-      // Auto typing / recording indicator
-      const msgType = Object.keys(msg.message || {})[0];
-      const isVoiceOrAudio =
-        msgType === "audioMessage" ||
-        msg.message?.audioMessage?.ptt === true;
-      const shouldRecord = isVoiceOrAudio && settings.get("autoRecording");
-      const shouldType   = !isVoiceOrAudio && settings.get("autoTyping");
-      if (shouldRecord || shouldType) {
-        sock.sendPresenceUpdate(shouldRecord ? "recording" : "composing", from).catch(() => {});
-      }
-
-      // Auto-reveal view-once
-      if (settings.get("voReveal")) {
-        const _m = msg.message?.ephemeralMessage?.message || msg.message;
-        const voInner =
-          _m?.viewOnceMessage?.message ||
-          _m?.viewOnceMessageV2?.message ||
-          _m?.viewOnceMessageV2Extension?.message ||
-          (_m?.imageMessage?.viewOnce ? { imageMessage: _m.imageMessage } : null) ||
-          (_m?.videoMessage?.viewOnce ? { videoMessage: _m.videoMessage } : null) ||
-          (_m?.audioMessage?.viewOnce ? { audioMessage: _m.audioMessage } : null);
-        if (voInner) {
-          const mediaType = Object.keys(voInner)[0];
-          if (["imageMessage", "videoMessage", "audioMessage"].includes(mediaType)) {
-            const fakeMsg = {
-              key: { remoteJid: from, id: msg.key.id, fromMe: msg.key.fromMe || false, participant: senderJid || undefined },
-              message: voInner,
-            };
-            try {
-              const buf = Buffer.from(await downloadMediaMessage(fakeMsg, "buffer", {}));
-              const media = voInner[mediaType];
-              const caption = `👁 *View Once Auto-Revealed* by NEXUS-MD\n${media.caption ? `_${media.caption}_` : ""}`.trim();
-              if (mediaType === "imageMessage") {
-                await sock.sendMessage(from, { image: buf, caption });
-              } else if (mediaType === "videoMessage") {
-                await sock.sendMessage(from, { video: buf, caption, mimetype: media.mimetype || "video/mp4" });
-              } else {
-                await sock.sendMessage(from, { audio: buf, mimetype: media.mimetype || "audio/ogg; codecs=opus", ptt: media.ptt || false });
-              }
-            } catch (e) { console.error("AutoReveal error:", e.message); }
-          }
-        }
-      }
-
-      // Anti-sticker (group only)
-      if (from.endsWith("@g.us") && msgType === "stickerMessage") {
-        const grpStickerSettings = security.getGroupSettings(from);
-        if (grpStickerSettings.antiSticker) {
-          const stickerPhone = senderJid.split("@")[0].split(":")[0];
-          const grpParts = await admin.getGroupParticipants(sock, from).catch(() => []);
-          if (!admin.isAdmin(senderJid, grpParts)) {
-            try {
-              await sock.sendMessage(from, { delete: msg.key });
-              await sock.sendMessage(from,
-                { text: `🚫 @${stickerPhone} stickers are not allowed here!`, mentions: [senderJid] },
-                { quoted: msg }
-              );
-            } catch {}
-            continue;
-          }
-        }
-      }
-
-      broadcast.addRecipient(senderJid);
-      await commands.handle(sock, msg).catch((err) => {
-        console.error("Message handler error:", err.message);
-      });
-      if (shouldRecord || shouldType) {
-        sock.sendPresenceUpdate("paused", from).catch(() => {});
-      }
+      // Fire each message as an independent async task — never blocks the loop
+      // On Heroku, this means .ping responds immediately even while history syncs
+      processMessage(msg).catch(err => console.error("processMessage error:", err.message));
     }
   });
 
