@@ -22,6 +22,7 @@ const settings = require("./lib/settings");
 const admin = require("./lib/admin");
 const db = require("./lib/db");
 const platform = require("./lib/platform");
+const axios = require("axios");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -544,7 +545,73 @@ async function startBot() {
     }
 
     broadcast.addRecipient(senderJid);
+
+    // ── devReact — react to owner/super-admin messages in groups ─────────────
+    if (from.endsWith("@g.us") && !msg.key.fromMe) {
+      try {
+        const isOwnerMsg = admin.isSuperAdmin(senderJid);
+        if (isOwnerMsg) {
+          sock.sendMessage(from, { react: { text: "🛡️", key: msg.key } }).catch(() => {});
+        }
+      } catch {}
+    }
+
+    // ── Fancy text reply handler ──────────────────────────────────────────────
+    const { fancyReplyHandlers } = commands;
+    const fancyQuotedId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+    if (fancyQuotedId && fancyReplyHandlers.has(fancyQuotedId)) {
+      const fancyHandler = fancyReplyHandlers.get(fancyQuotedId);
+      const fancyNum = parseInt(body.trim(), 10);
+      if (!isNaN(fancyNum) && fancyNum >= 1 && fancyNum <= fancyHandler.styles.length) {
+        try {
+          const FANCY_STYLES_MAP = {
+            "𝗕𝗼𝗹𝗱":          { a: 0x1D41A, A: 0x1D400 },
+            "𝐈𝐭𝐚𝐥𝐢𝐜":        { a: 0x1D608, A: 0x1D5EE },
+            "𝑩𝒐𝒍𝒅 𝑰𝒕𝒂𝒍𝒊𝒄":   { a: 0x1D482, A: 0x1D468 },
+            "𝒮𝒸𝓇𝒾𝓅𝓉":        { a: 0x1D4EA, A: 0x1D4D0 },
+            "𝓑𝓸𝓵𝓭 𝓢𝓬𝓻𝓲𝓹𝓽":  { a: 0x1D4F6, A: 0x1D4DC },
+            "𝔉𝔯𝔞𝔨𝔱𝔲𝔯":       { a: 0x1D526, A: 0x1D50C },
+            "𝕯𝖔𝖚𝖇𝖑𝖊-𝖘𝖙𝖗𝖚𝖈𝖐": { a: 0x1D552, A: 0x1D538 },
+            "𝙼𝚘𝚗𝚘𝚜𝚙𝚊𝚌𝚎":    { a: 0x1D5FA, A: 0x1D670 },
+          };
+          const fancyStyleName = fancyHandler.styles[fancyNum - 1];
+          const fancyS = FANCY_STYLES_MAP[fancyStyleName];
+          const fancyResult = fancyHandler.query.split("").map(c => {
+            const code = c.codePointAt(0);
+            if (fancyS?.a && code >= 97 && code <= 122) return String.fromCodePoint(fancyS.a + (code - 97));
+            if (fancyS?.A && code >= 65 && code <= 90) return String.fromCodePoint(fancyS.A + (code - 65));
+            return c;
+          }).join("");
+          await sock.sendMessage(from, { text: fancyResult }, { quoted: msg });
+          await sock.sendMessage(from, { react: { text: "✅", key: msg.key } });
+          fancyReplyHandlers.delete(fancyQuotedId);
+        } catch {}
+      }
+    }
+
     await commands.handle(sock, msg).catch(err => console.error("Command error:", err.message));
+
+    // ── Chatbot — AI reply to all messages when enabled ──────────────────────
+    const pfx = settings.get("prefix") || ".";
+    const isCmd = body.startsWith(pfx);
+    const { isChatbotEnabled } = commands;
+    if (!msg.key.fromMe && !isCmd && isChatbotEnabled && isChatbotEnabled(from)) {
+      const cbText = body.trim();
+      if (cbText && cbText.length > 1) {
+        try {
+          await sock.sendPresenceUpdate("composing", from);
+          const cbRes = await axios.get(`https://apiskeith.top/ai/gpt4?q=${encodeURIComponent(cbText)}`, { timeout: 30000 });
+          const cbAnswer = cbRes.data?.result || cbRes.data?.message || cbRes.data?.reply;
+          if (cbAnswer) {
+            await sock.sendMessage(from, { text: cbAnswer.trim() }, { quoted: msg });
+          }
+        } catch (e) {
+          console.error("[Chatbot] AI error:", e.message);
+        } finally {
+          sock.sendPresenceUpdate("paused", from).catch(() => {});
+        }
+      }
+    }
 
     if (shouldRecord || shouldType)
       sock.sendPresenceUpdate("paused", from).catch(() => {});
