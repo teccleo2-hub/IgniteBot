@@ -287,11 +287,11 @@ app.get("/", (req, res) => {
     status: botStatus,
     phone: botPhoneNumber ? "+" + botPhoneNumber : null,
     uptime: `${h}h ${m}m ${s}s`,
-    session_format: "NEXUS-MD:~",
+    session_format: "universal (NEXUS-MD, base64, raw JSON, https:// URL)",
     tip: botStatus !== "connected"
-      ? `Not connected. 1) Visit ${PAIR_SITE_URL} to get a NEXUS-MD session ID. 2) POST it to /session to connect: curl -X POST /session -H 'Content-Type:application/json' -d '{"session":"NEXUS-MD..."}'`
+      ? `Not connected. 1) Visit ${PAIR_SITE_URL} to get a session. 2) POST any valid Baileys session to /session: curl -X POST /session -H 'Content-Type:application/json' -d '{"session":"<your-session-here>"}'`
       : "Bot is connected! Type .menu in WhatsApp to get started.",
-    sessionEndpoint: "POST /session  { session: 'NEXUS-MD...' }",
+    sessionEndpoint: "POST /session  { session: '<NEXUS-MD:~... | base64 | JSON | https://URL>' }",
     pairingSite: PAIR_SITE_URL,
     pairingCode: pairingCode || null,
   });
@@ -308,13 +308,20 @@ app.get("/api/session", (req, res) => {
 });
 
 // ── Accept any session ID/string and connect ─────────────────────────────────
-// Accepts: NEXUS-MD, bare URL, raw JSON, base64, multi-file map, any prefix
+// Accepts: NEXUS-MD, bare URL, raw JSON string, base64 creds, object-form creds
 app.post("/session", async (req, res) => {
-  const { session, sessionId } = req.body || {};
-  const raw = (session || sessionId || "").trim();
+  const body = req.body || {};
+  let rawValue = body.session || body.sessionId;
+
+  // Object-form: { session: { noiseKey: {...}, ... } } — serialise to string
+  if (rawValue && typeof rawValue === "object") {
+    rawValue = JSON.stringify(rawValue);
+  }
+
+  const raw = (rawValue || "").trim();
   if (!raw) return res.status(400).json({
     error: "Provide { session: '...' } in the request body.",
-    hint: "Accepted formats: NEXUS-MD:~..., any https:// URL, raw JSON creds, base64 creds"
+    hint: "Accepted formats: NEXUS-MD:~..., https:// URL, raw JSON string, base64, creds object"
   });
 
   try {
@@ -438,11 +445,12 @@ async function startBot() {
       host = `http://localhost:${PORT}`;
     }
     console.log("⚠️  No WhatsApp session found.");
-    console.log(`🔗 Step 1 — Get a NEXUS-MD session ID at: ${PAIR_SITE_URL}`);
-    console.log("   Enter your number → enter the code in WhatsApp → copy the NEXUS-MD session ID shown");
-    console.log(`🔗 Step 2 — POST it here to connect instantly:`);
-    console.log(`   curl -X POST ${host}/session -H 'Content-Type: application/json' -d '{"session":"NEXUS-MD..."}'`);
-    console.log(`   Or direct pair without Railway: ${host}/pair/YOUR_PHONE_NUMBER`);
+    console.log(`🔗 Step 1 — Pair your number at: ${PAIR_SITE_URL}`);
+    console.log("   Enter your number → enter the code in WhatsApp → copy the session ID shown");
+    console.log(`🔗 Step 2 — POST any valid session here to connect instantly:`);
+    console.log(`   curl -X POST ${host}/session -H 'Content-Type: application/json' -d '{"session":"<session-id>"}'`);
+    console.log(`   Accepted: NEXUS-MD:~..., https:// URL, raw JSON creds, base64 creds`);
+    console.log(`   Or direct pair: ${host}/pair/YOUR_PHONE_NUMBER`);
   }
 
   const { version } = await fetchLatestBaileysVersion();
