@@ -6,9 +6,15 @@
   "logo": "",
   "success_url": "/",
   "stack": "heroku-22",
+  "addons": [
+    {
+      "plan": "heroku-postgresql:essential-0",
+      "as": "DATABASE"
+    }
+  ],
   "env": {
     "SESSION_ID": {
-      "description": "Your WhatsApp session ID (any format: NEXUS-MD:~..., base64, raw JSON, or https:// URL). Deploy first, pair via /pair or scan QR, then copy the Session ID and paste here so the bot auto-connects on every restart.",
+      "description": "Your WhatsApp session ID — must start with NEXUS-MD:~... Get it free at https://nexs-session-1.replit.app then paste it here.",
       "required": false,
       "value": ""
     },
@@ -22,15 +28,10 @@
       "required": false,
       "value": ""
     },
-    "DATABASE_URL": {
-      "description": "PostgreSQL connection string. Heroku Postgres add-on sets this automatically. Leave blank on panels/VPS — the bot uses local file storage instead.",
-      "required": false,
-      "value": ""
-    },
     "PAIR_SITE_URL": {
-      "description": "URL of the external pairing site used to generate session IDs. Defaults to the built-in pairing endpoint.",
+      "description": "External pairing site for generating NEXUS-MD session IDs.",
       "required": false,
-      "value": ""
+      "value": "https://nexs-session-1.replit.app"
     },
     "PORT": {
       "description": "HTTP port for the web dashboard. Heroku assigns this automatically. Panels: set to any open port (default: 5000).",

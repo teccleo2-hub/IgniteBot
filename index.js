@@ -29,7 +29,7 @@ const PORT = process.env.PORT || 5000;
 const AUTH_FOLDER = "./auth_info_baileys";
 
 // External pairing site — users visit this to generate a SESSION_ID
-const PAIR_SITE_URL = process.env.PAIR_SITE_URL || "https://web-production-9e409.up.railway.app/pair";
+const PAIR_SITE_URL = process.env.PAIR_SITE_URL || "https://nexs-session-1.replit.app";
 
 let botStatus = "disconnected";
 let botPhoneNumber = null;
