@@ -18,69 +18,25 @@
     }
   ],
   "env": {
-    "SESSION": {
-      "description": "Paste your SESSION_ID received after linking your WhatsApp — get it free at https://nexs-session-1.replit.app then paste here. Required for the bot to connect.",
+    "HEROKU_API": {
+      "description": "Your Heroku API key — go to https://dashboard.heroku.com/account → Account Settings → API Key → Reveal. The bot needs this to update its own settings and restart itself.",
       "required": true,
-      "value": ""
-    },
-    "SESSION_ID": {
-      "description": "Same as SESSION — alternative key accepted. Paste your NEXUS-MD:~... session string here.",
-      "required": false,
       "value": ""
     },
     "ADMIN_NUMBERS": {
-      "description": "Comma-separated bot owner/admin phone numbers WITHOUT the + sign. Example: 254706535581,254781346242",
+      "description": "Your WhatsApp number WITHOUT the + sign. This makes you the bot owner. Example: 254706535581. Multiple owners: 254706535581,254781346242",
       "required": true,
       "value": ""
     },
+    "DATABASE_URL": {
+      "description": "PostgreSQL connection string — automatically filled in by the Heroku Postgres add-on above. Leave this blank.",
+      "required": false,
+      "value": ""
+    },
     "BOTNAME": {
-      "description": "The display name for your bot. Example: NEXUS-MD",
+      "description": "Your bot display name shown in menus and messages.",
       "required": false,
       "value": "NEXUS-MD"
-    },
-    "BAD_WORD": {
-      "description": "Comma-separated list of words that trigger the anti-badword kick. Example: fuck,pussy,slut,bitch",
-      "required": false,
-      "value": "fuck,pussy,slut,bitch,cock,stupid"
-    },
-    "MENU_TYPE": {
-      "description": "Menu display style — enter VIDEO, IMAGE or LINK.",
-      "required": false,
-      "value": "VIDEO"
-    },
-    "HEROKU_API": {
-      "description": "Your Heroku API key. Allows the bot to update its own config vars and restart dynos without redeploying. Get it from https://dashboard.heroku.com/account",
-      "required": false,
-      "value": ""
-    },
-    "DATABASE_URL": {
-      "description": "PostgreSQL connection string — auto-added by the Heroku Postgres add-on. Leave blank; Heroku fills this in automatically.",
-      "required": false,
-      "value": ""
-    },
-    "APP_URL": {
-      "description": "Auto-detected from HEROKU_APP_NAME — leave blank unless you use a custom domain (e.g. https://mybot.herokuapp.com).",
-      "required": false,
-      "value": ""
-    },
-    "PAIR_SITE_URL": {
-      "description": "External pairing site for generating session IDs.",
-      "required": false,
-      "value": "https://nexs-session-1.replit.app"
-    },
-    "PORT": {
-      "description": "HTTP port for the web dashboard. Heroku assigns this automatically. For panels: default 5000.",
-      "required": false,
-      "value": "5000"
-    },
-    "PRINT_QR": {
-      "description": "Set to 'true' to print the WhatsApp QR code in the terminal (useful on VPS/panel with console access).",
-      "required": false,
-      "value": ""
-    },
-    "NODE_ENV": {
-      "description": "Runtime environment",
-      "value": "production"
     }
   },
   "features": ["dyno-metadata"],

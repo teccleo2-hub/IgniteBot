@@ -627,49 +627,59 @@ function generateHerokuFill() {
   const phone = (document.getElementById('setupPhone').value||'').replace(/\\D/g,'').trim();
   const sessionId = (document.getElementById('setupSessionId').value||'').trim();
   const botname = (document.getElementById('setupBotname').value||'NEXUS-MD').trim();
-  const badword = (document.getElementById('setupBadword').value||'fuck,pussy,slut,bitch,cock,stupid').trim();
-  const menuType = (document.getElementById('setupMenuType').value||'VIDEO').trim();
+  const apiKey = (document.getElementById('herokuApiKey').value||'').trim();
   const out = document.getElementById('herokuFillOutput');
 
-  if (!sessionId && !phone) {
-    out.innerHTML = '<span style="color:#d29922">⚠️ Fill in the Quick Setup fields above first.</span>';
+  if (!phone && !apiKey) {
+    out.innerHTML = '<span style="color:#d29922">⚠️ Fill in at least your phone number above first.</span>';
     return;
   }
 
-  const rows = [
-    { key: 'SESSION', val: sessionId || '(paste your session ID)', note: 'Required — your WhatsApp session' },
-    { key: 'SESSION_ID', val: sessionId || '(paste your session ID)', note: 'Alternative key' },
-    { key: 'ADMIN_NUMBERS', val: phone || '(your phone without +)', note: 'Owner number(s)' },
-    { key: 'BOTNAME', val: botname, note: 'Bot display name' },
-    { key: 'BAD_WORD', val: badword, note: 'Words that trigger kick' },
-    { key: 'MENU_TYPE', val: menuType, note: 'VIDEO, IMAGE or LINK' },
-    { key: 'NODE_ENV', val: 'production', note: 'Runtime environment' },
-    { key: 'PAIR_SITE_URL', val: 'https://nexs-session-1.replit.app', note: 'Pairing site' },
-    { key: 'HEROKU_API', val: (document.getElementById('herokuApiKey').value||'').trim() || '(your Heroku API key)', note: 'For auto-restart/update' },
+  const deployRows = [
+    { key: 'HEROKU_API', val: apiKey || '(your Heroku API key from dashboard.heroku.com/account)', label: 'Heroku API Key' },
+    { key: 'ADMIN_NUMBERS', val: phone || '(your WhatsApp number without +)', label: 'Owner Phone' },
+    { key: 'DATABASE_URL', val: '(auto-filled by Heroku Postgres add-on — leave blank)', label: 'Database URL' },
+    { key: 'BOTNAME', val: botname, label: 'Bot Name' },
   ];
 
+  const postDeploySession = sessionId
+    ? \`<span style="color:#3fb950;font-family:monospace">.setvar SESSION=\${sessionId}</span>\`
+    : \`<span style="color:#8b949e;font-family:monospace">.setvar SESSION=NEXUS-MD:~...&lt;your-session-id&gt;</span>\`;
+
   out.innerHTML = \`
-    <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow:hidden">
+    <p style="font-size:0.82rem;color:#8b949e;margin:0 0 10px">
+      The Heroku deploy form only shows these 4 fields — everything else is pre-configured automatically.
+    </p>
+    <div style="background:#0d1117;border:1px solid #30363d;border-radius:8px;overflow:hidden;margin-bottom:14px">
       <table style="width:100%;border-collapse:collapse">
         <thead><tr>
-          <th style="text-align:left;padding:10px 14px;font-size:0.75rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #30363d">Config Var</th>
-          <th style="text-align:left;padding:10px 14px;font-size:0.75rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #30363d">Value</th>
+          <th style="text-align:left;padding:10px 14px;font-size:0.75rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #30363d">Field</th>
+          <th style="text-align:left;padding:10px 14px;font-size:0.75rem;color:#8b949e;text-transform:uppercase;border-bottom:1px solid #30363d">Value to paste</th>
           <th style="padding:10px 14px;border-bottom:1px solid #30363d"></th>
         </tr></thead>
         <tbody>
-          \${rows.map(r => \`<tr>
-            <td style="padding:10px 14px;font-family:monospace;color:#79c0ff;font-size:0.85rem;border-bottom:1px solid #21262d">\${r.key}</td>
+          \${deployRows.map(r => \`<tr>
+            <td style="padding:10px 14px;font-family:monospace;color:#79c0ff;font-size:0.85rem;border-bottom:1px solid #21262d;white-space:nowrap">\${r.key}</td>
             <td style="padding:10px 14px;font-family:monospace;font-size:0.78rem;color:#e6edf3;word-break:break-all;border-bottom:1px solid #21262d">\${r.val}</td>
             <td style="padding:10px 14px;border-bottom:1px solid #21262d;white-space:nowrap">
-              <button class="btn btn-gray" style="padding:4px 10px;font-size:0.75rem" onclick="navigator.clipboard.writeText('\${r.val.replace(/'/g,\\"\\\\'\\")}');toast('Copied!')">Copy</button>
+              \${r.val.startsWith('(') ? '' : \`<button class="btn btn-gray" style="padding:4px 10px;font-size:0.75rem" onclick="navigator.clipboard.writeText('\${r.val.replace(/'/g,\\"\\\\'\\")}');toast('Copied!')">Copy</button>\`}
             </td>
           </tr>\`).join('')}
         </tbody>
       </table>
     </div>
-    <p style="font-size:0.8rem;color:#8b949e;margin-top:10px">
-      Paste these values in the Heroku deploy form Config Vars section, or use the Quick Setup above to auto-push them via API.
-    </p>
+    <div style="background:#161b22;border:1px solid #388bfd44;border-radius:8px;padding:14px">
+      <p style="margin:0 0 8px;font-size:0.85rem;color:#79c0ff;font-weight:600">📱 Step 2 — Connect WhatsApp after deploy</p>
+      <p style="margin:0 0 8px;font-size:0.82rem;color:#c9d1d9">
+        Once your Heroku app is running, get a session ID from
+        <a href="https://nexs-session-1.replit.app" target="_blank" style="color:#58a6ff">nexs-session-1.replit.app</a>
+        then send this command to the bot (or paste via the Heroku Config Vars page):
+      </p>
+      <div style="background:#0d1117;border-radius:6px;padding:10px 14px;font-size:0.85rem">
+        \${postDeploySession}
+      </div>
+      \${sessionId ? \`<p style="margin:8px 0 0;font-size:0.78rem;color:#3fb950">✅ Your session ID is already filled in above — just copy and send it to the bot!</p>\` : ''}
+    </div>
   \`;
 }
 
