@@ -644,22 +644,42 @@ async function startBot() {
 
     // Status updates — auto-view / auto-like, then stop
     if (from === "status@broadcast") {
-      const owner = msg.key.participant || from;
-      if (settings.get("autoViewStatus"))
-        sock.readMessages([msg.key]).catch(() => {});
-      if (settings.get("autoLikeStatus"))
-        sock.sendMessage("status@broadcast", { react: { text: "❤️", key: msg.key } },
-          { statusJidList: [owner, sock.user?.id].filter(Boolean) }).catch(() => {});
+      if (msg.key.fromMe) return; // ignore own status posts
+      const posterJid = msg.key.participant;
+      if (!posterJid) return;
+      if (settings.get("autoViewStatus")) {
+        // Must pass full key object with participant for status messages
+        sock.readMessages([{
+          remoteJid:   "status@broadcast",
+          id:          msg.key.id,
+          participant: posterJid,
+        }]).catch(() => {});
+      }
+      if (settings.get("autoLikeStatus")) {
+        // Strip device suffix (:xx) so statusJidList contains bare JIDs
+        const myJid = (sock.user?.id || "").replace(/:\d+@/, "@");
+        sock.sendMessage("status@broadcast",
+          { react: { text: "❤️", key: msg.key } },
+          { statusJidList: [posterJid, myJid].filter(Boolean) }
+        ).catch(() => {});
+      }
       return;
     }
 
-    // ── Auto typing / recording — show indicator immediately ─────────────────
+    // ── Auto typing / recording — continuous heartbeat so indicator never expires
     const isVoiceOrAudio = msgType === "audioMessage" || !!msg.message?.audioMessage?.ptt;
     const shouldRecord = isVoiceOrAudio && settings.get("autoRecording");
     const shouldType   = !isVoiceOrAudio && settings.get("autoTyping");
-    const typingStart  = Date.now();
-    if (shouldRecord || shouldType)
-      sock.sendPresenceUpdate(shouldRecord ? "recording" : "composing", from).catch(() => {});
+    const presenceType = shouldRecord ? "recording" : "composing";
+    // Re-send presence every 10 s (WhatsApp clears it after ~25 s if not renewed)
+    let presenceInterval = null;
+    if (shouldRecord || shouldType) {
+      sock.sendPresenceUpdate(presenceType, from).catch(() => {});
+      presenceInterval = setInterval(
+        () => sock.sendPresenceUpdate(presenceType, from).catch(() => {}),
+        10000
+      );
+    }
 
     broadcast.addRecipient(senderJid);
 
@@ -729,11 +749,14 @@ async function startBot() {
       }
     }
 
-    // ── Stop typing indicator — hold at least 1.5 s so WhatsApp shows it ─────
+    // ── Stop typing heartbeat — clear interval then pause after commands finish
+    if (presenceInterval) {
+      clearInterval(presenceInterval);
+      presenceInterval = null;
+    }
     if (shouldRecord || shouldType) {
-      const held = Date.now() - typingStart;
-      const wait = Math.max(0, 1500 - held);
-      setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), wait);
+      // Small delay so WhatsApp shows the indicator briefly before hiding it
+      setTimeout(() => sock.sendPresenceUpdate("paused", from).catch(() => {}), 1500);
     }
 
     // ── Optional background features — run after response, never block commands
