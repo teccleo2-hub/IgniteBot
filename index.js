@@ -525,6 +525,8 @@ async function startBot() {
         reconnectAttempts = 0;
         console.log("⚠️ Logged out. Clearing session and restarting...");
         if (fs.existsSync(AUTH_FOLDER)) fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+        // Clear the persisted session so we don't try to restore a dead session
+        try { db.write("_latestSession", { id: null }); } catch {}
         setTimeout(startBot, 1000);
       }
     }
@@ -542,6 +544,8 @@ async function startBot() {
       if (currentSessionId) {
         console.log(`🔑 Session ID: ${currentSessionId.slice(0, 30)}...`);
         console.log("💡 Set SESSION_ID env var with this value to auto-connect on restart");
+        // Persist immediately so a fast dyno restart can recover without QR
+        try { db.write("_latestSession", { id: currentSessionId }); } catch {}
       }
       const prefix = settings.get("prefix") || ".";
       console.log(`⚡ Bot ready — prefix: ${prefix} | Type ${prefix}menu`);
@@ -583,9 +587,22 @@ async function startBot() {
     }
   });
 
+  // Session-save debounce: creds.update fires on every message send/receive.
+  // Batch DB writes to at most once every 10 s to avoid hammering the DB.
+  let _sessionSaveTimer = null;
   sock.ev.on("creds.update", () => {
     saveCreds();
     currentSessionId = encodeSession();
+    if (_sessionSaveTimer) clearTimeout(_sessionSaveTimer);
+    _sessionSaveTimer = setTimeout(() => {
+      if (currentSessionId) {
+        try {
+          db.write("_latestSession", { id: currentSessionId });
+        } catch (e) {
+          console.error("⚠️ Could not persist session to DB:", e.message);
+        }
+      }
+    }, 10000);
   });
 
   // ── Active message processor — runs independently per message ──────────────
@@ -1020,10 +1037,19 @@ db.init()
     // Bootstrap all default settings into the DB so every key is persisted
     settings.initSettings();
 
-    if (process.env.SESSION_ID) {
-      // Always restore — universal detector handles all formats
-      console.log("📦 Restoring WhatsApp session from SESSION_ID (universal)...");
-      await restoreSession(process.env.SESSION_ID);
+    // ── Session restore priority ────────────────────────────────────────────
+    // 1. DB-persisted session (most recent — updated every 10 s while running)
+    // 2. SESSION_ID env var (original setup value — fallback if DB is empty)
+    //
+    // Persisting to DB prevents logout when Heroku/panel restarts the process
+    // and wipes the ephemeral auth_info_baileys/ folder, leaving the bot with
+    // a stale SESSION_ID env var that WhatsApp has already rotated away from.
+    const dbSession = db.read("_latestSession", null);
+    const sessionToRestore = dbSession?.id || process.env.SESSION_ID || null;
+    if (sessionToRestore) {
+      const src = dbSession?.id ? "database (latest)" : "SESSION_ID env var";
+      console.log(`📦 Restoring WhatsApp session from ${src}...`);
+      await restoreSession(sessionToRestore);
     }
     return startBot();
   })
