@@ -22,6 +22,7 @@ const settings = require("./lib/settings");
 const admin = require("./lib/admin");
 const db = require("./lib/db");
 const platform = require("./lib/platform");
+const premium = require("./lib/premium");
 const axios = require("axios");
 
 const app = express();
@@ -755,6 +756,10 @@ async function startBot() {
         }
       }, 30000);
 
+      // ── Premium schedulers ─────────────────────────────────────────────────
+      premium.startReminderScheduler(sock);
+      premium.startDigestScheduler(sock);
+
       // ── Periodic full auth-folder persist every 30 s ────────────────────
       // Baileys writes signal-key files to disk independently of creds.update.
       // This timer makes sure ALL of them (pre-keys, session-keys, app-state)
@@ -869,6 +874,36 @@ async function startBot() {
 
     broadcast.addRecipient(senderJid);
 
+    // ── Premium: buffer message for catch-up / mood ───────────────────────────
+    if (body && !msg.key.fromMe) {
+      premium.bufferMessage(from, phone, body);
+    }
+
+    // ── Premium: auto-transcribe voice notes ──────────────────────────────────
+    const _pttMsg = _inner?.audioMessage;
+    if (!msg.key.fromMe && _pttMsg) {
+      const isGroupChat = from.endsWith("@g.us");
+      const shouldTranscribe = isGroupChat
+        ? premium.isAutoTranscribeEnabled(from)
+        : true; // always transcribe in DMs
+      if (shouldTranscribe) {
+        (async () => {
+          try {
+            const audioBuf = Buffer.from(await downloadMediaMessage(msg, "buffer", {}));
+            const transcript = await premium.transcribeAudio(audioBuf, _pttMsg.mimetype || "audio/ogg");
+            if (transcript && transcript.trim()) {
+              const indicator = _pttMsg.ptt ? "🎙 *Voice Note Transcript*" : "🎵 *Audio Transcript*";
+              await sock.sendMessage(from, {
+                text: `${indicator}\n${"─".repeat(24)}\n\n${transcript.trim()}`,
+              }, { quoted: msg });
+            }
+          } catch (e) {
+            // silent — transcription is optional
+          }
+        })();
+      }
+    }
+
     // ── devReact — react to owner/super-admin messages in groups ─────────────
     if (from.endsWith("@g.us") && !msg.key.fromMe) {
       try {
@@ -908,6 +943,29 @@ async function startBot() {
           fancyReplyHandlers.delete(fancyQuotedId);
         } catch {}
       }
+    }
+
+    // ── Premium: auto OCR for image messages sent to bot ─────────────────────
+    // Triggers in DMs when an image is sent (auto-detect text in images).
+    // Does NOT trigger when caption is ".ocr" — that is handled by commands.handle.
+    const _ocrInner = _inner?.imageMessage;
+    const _ocrCaption = (_ocrInner?.caption || "").trim().toLowerCase();
+    const _ocrPrefix = settings.get("prefix") || ".";
+    const _ocrIsCmd = _ocrCaption.startsWith(_ocrPrefix);
+    if (!msg.key.fromMe && _ocrInner && !_ocrIsCmd && !from.endsWith("@g.us")) {
+      (async () => {
+        try {
+          const ocrBuf = Buffer.from(await downloadMediaMessage(msg, "buffer", {}));
+          const ocrText = await premium.extractTextFromImage(ocrBuf);
+          if (ocrText && ocrText.trim() && ocrText !== "No text found") {
+            await sock.sendMessage(from, {
+              text: `📄 *Extracted Text:*\n${"─".repeat(24)}\n\n${ocrText.trim()}`,
+            }, { quoted: msg });
+          }
+        } catch (e) {
+          // silent
+        }
+      })();
     }
 
     // ── Commands — processed immediately after typing indicator ───────────────
@@ -1109,7 +1167,31 @@ async function startBot() {
     // Normalize participants — Baileys v7 may yield objects {id, admin} or plain JID strings
     const normalizeJid = (p) => typeof p === "string" ? p : (p?.id || p?.jid || String(p));
     if (action === "add") {
-      for (const p of participants) await groups.sendWelcome(sock, id, normalizeJid(p)).catch(() => {});
+      for (const p of participants) {
+        const memberJid = normalizeJid(p);
+        // Standard welcome message
+        await groups.sendWelcome(sock, id, memberJid).catch(() => {});
+        // Premium welcome card (if enabled for this group)
+        if (premium.isWelcomeCardEnabled(id)) {
+          (async () => {
+            try {
+              const meta      = await sock.groupMetadata(id);
+              const member    = meta.participants.find(x => x.id === memberJid);
+              const name      = member?.notify || memberJid.split("@")[0];
+              const cardBuf   = await premium.generateWelcomeCard(name, meta.subject);
+              if (cardBuf) {
+                await sock.sendMessage(id, {
+                  image:   cardBuf,
+                  caption: `🎉 Welcome *${name}* to *${meta.subject}*! 🎊\n\n_Enjoy your stay — NEXUS-MD ⚡_`,
+                  mentions: [memberJid],
+                });
+              }
+            } catch (e) {
+              console.error("[WelcomeCard] error:", e.message);
+            }
+          })();
+        }
+      }
     } else if (action === "remove") {
       for (const p of participants) await groups.sendGoodbye(sock, id, normalizeJid(p)).catch(() => {});
       const antiLeaveOn = security.getGroupSettings(id).antiLeave;
