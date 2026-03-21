@@ -449,9 +449,21 @@ _server.on("error", (err) => {
 })();
 
 // ── Graceful shutdown (SIGTERM from panel stop / Heroku restart) ─────────────
+// IMPORTANT: save the full session to DB *before* closing so the next
+// startup has the latest keys even if the 30 s periodic save hasn't fired.
 async function gracefulShutdown(signal) {
   console.log(`\n🛑 ${signal} received — shutting down gracefully…`);
+  // 1. Flush full session to DB NOW before anything closes
+  try {
+    const sid = encodeSession();
+    if (sid) {
+      db.write("_latestSession", { id: sid });
+      console.log("💾 Session flushed to DB before shutdown.");
+    }
+  } catch {}
+  // 2. Clean-close the WhatsApp socket
   try { if (sockRef) await sockRef.end(); } catch {}
+  // 3. Close HTTP server
   _server.close(() => {
     console.log("✅ HTTP server closed. Goodbye!");
     process.exit(0);
@@ -460,6 +472,19 @@ async function gracefulShutdown(signal) {
 }
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT",  () => gracefulShutdown("SIGINT"));
+
+// ── Emergency session flush on crash ─────────────────────────────────────────
+// If the process crashes (unhandled error), try to save the session first
+// so the next startup reconnects without re-pairing.
+function emergencyFlush(label, err) {
+  console.error(`💥 ${label}:`, err?.message || err);
+  try {
+    const sid = encodeSession();
+    if (sid) db.write("_latestSession", { id: sid });
+  } catch {}
+}
+process.on("uncaughtException",   (err) => { emergencyFlush("Uncaught exception", err);   });
+process.on("unhandledRejection",  (err) => { emergencyFlush("Unhandled rejection", err);  });
 
 
 // ── Global console filter — suppress libsignal / Baileys decryption noise ──
@@ -484,6 +509,17 @@ function reconnectDelay() {
 }
 
 async function startBot() {
+  // If the auth folder is empty or missing (e.g. container restarted mid-cycle
+  // and the startup DB-restore ran but was skipped this call), try the DB again.
+  const credsPath = path.join(AUTH_FOLDER, "creds.json");
+  if (!fs.existsSync(credsPath)) {
+    const dbSess = db.read("_latestSession", null);
+    if (dbSess?.id) {
+      console.log("🔄 Auth folder empty on reconnect — re-restoring from DB...");
+      await restoreSession(dbSess.id).catch(() => {});
+    }
+  }
+
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER);
 
   // Warn early when there are no credentials so the user knows what to do
@@ -538,22 +574,34 @@ async function startBot() {
 
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       botStatus = "disconnected";
       sockRef = null;
       if (alwaysOnlineInterval)    { clearInterval(alwaysOnlineInterval);    alwaysOnlineInterval    = null; }
       if (sessionPersistInterval)  { clearInterval(sessionPersistInterval);  sessionPersistInterval  = null; }
-      if (shouldReconnect) {
+
+      const DR = DisconnectReason;
+      const isLoggedOut        = statusCode === DR.loggedOut;         // 401 — WhatsApp revoked the session
+      const isBadSession       = statusCode === 500;                  // corrupted keys
+      const isReplaced         = statusCode === DR.connectionReplaced; // 440 — another device took over
+      const clearAndRestart    = isLoggedOut || isBadSession;
+
+      if (clearAndRestart) {
+        reconnectAttempts = 0;
+        if (isLoggedOut) console.log("⚠️ Logged out by WhatsApp. Clearing session...");
+        if (isBadSession) console.log("⚠️ Bad session detected. Clearing and restarting...");
+        if (fs.existsSync(AUTH_FOLDER)) fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
+        try { db.write("_latestSession", { id: null }); } catch {}
+        setTimeout(startBot, 2000);
+      } else if (isReplaced) {
+        // Another WhatsApp instance connected — wait longer before retrying
+        // to avoid a reconnect fight between two running instances.
+        console.log("⚠️ Connection replaced (another device connected). Retrying in 30 s...");
+        reconnectAttempts = 0;
+        setTimeout(startBot, 30000);
+      } else {
         const delay = reconnectDelay();
         console.log(`🔌 Connection closed (code: ${statusCode}). Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`);
         setTimeout(startBot, delay);
-      } else {
-        reconnectAttempts = 0;
-        console.log("⚠️ Logged out. Clearing session and restarting...");
-        if (fs.existsSync(AUTH_FOLDER)) fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
-        // Clear the persisted session so we don't try to restore a dead session
-        try { db.write("_latestSession", { id: null }); } catch {}
-        setTimeout(startBot, 1000);
       }
     }
 
