@@ -19,7 +19,7 @@
       "value": ""
     },
     "ADMIN_NUMBERS": {
-      "description": "Comma-separated bot owner/admin phone numbers WITHOUT the + sign. Example: 12345678901,447911123456",
+      "description": "Comma-separated bot owner/admin phone numbers WITHOUT the + sign. Example: 254706535581,254781346242",
       "required": false,
       "value": ""
     },
