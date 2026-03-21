@@ -328,6 +328,16 @@ app.get("/status", (req, res) => {
   res.json({ status: botStatus, phone: botPhoneNumber, mode: settings.get("mode") });
 });
 
+// ── Health check — Heroku / UptimeRobot / health monitors hit this ───────────
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    uptime: Math.floor(process.uptime()),
+    status: botStatus,
+    session: waitingForSession ? "waiting" : "active"
+  });
+});
+
 app.get("/api/session", (req, res) => {
   const sid = encodeSession();
   currentSessionId = sid;
@@ -544,8 +554,7 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT",  () => gracefulShutdown("SIGINT"));
 
 // ── Emergency session flush on crash ─────────────────────────────────────────
-// If the process crashes (unhandled error), try to save the session first
-// so the next startup reconnects without re-pairing.
+// Save the session before exiting so the next startup reconnects without re-pairing.
 function emergencyFlush(label, err) {
   console.error(`💥 ${label}:`, err?.message || err);
   try {
@@ -553,8 +562,18 @@ function emergencyFlush(label, err) {
     if (sid) db.write("_latestSession", { id: sid });
   } catch {}
 }
-process.on("uncaughtException",   (err) => { emergencyFlush("Uncaught exception", err);   });
-process.on("unhandledRejection",  (err) => { emergencyFlush("Unhandled rejection", err);  });
+process.on("uncaughtException", (err) => {
+  emergencyFlush("Uncaught exception", err);
+  // Exit so Heroku/supervisor can restart cleanly. Without exit() the process
+  // stays alive in an undefined state and Heroku kills it with R15/R14 errors.
+  setTimeout(() => process.exit(1), 500);
+});
+process.on("unhandledRejection", (err) => {
+  // Baileys generates many internal unhandled rejections — log them but don't exit.
+  const msg = err?.message || String(err);
+  const isNoise = /Bad MAC|decrypt|libsignal|Session error|ECONNREFUSED|timeout|socket hang up/i.test(msg);
+  if (!isNoise) console.warn(`⚠️  Unhandled rejection:`, msg);
+});
 
 
 // ── Global console filter — suppress libsignal / Baileys decryption noise ──
@@ -1288,9 +1307,11 @@ db.init()
     // and wipes the ephemeral auth_info_baileys/ folder, leaving the bot with
     // a stale SESSION_ID env var that WhatsApp has already rotated away from.
     const dbSession = db.read("_latestSession", null);
-    const sessionToRestore = dbSession?.id || process.env.SESSION_ID || null;
+    // Check all recognised session env vars (Perez uses SESSION, IgniteBot uses SESSION_ID)
+    const envSession = process.env.SESSION_ID || process.env.SESSION || null;
+    const sessionToRestore = dbSession?.id || envSession || null;
     if (sessionToRestore) {
-      const src = dbSession?.id ? "database (latest)" : "SESSION_ID env var";
+      const src = dbSession?.id ? "database (latest)" : "SESSION / SESSION_ID env var";
       console.log(`📦 Restoring WhatsApp session from ${src}...`);
       await restoreSession(sessionToRestore);
     }
