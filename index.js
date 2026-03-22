@@ -3073,13 +3073,12 @@ async function startBot() {
             const _os       = require("os");
             const _mem      = process.memoryUsage();
             const _totalRam = _os.totalmem();
-            const _usedRam  = _totalRam - _os.freemem();
-            const _ramPct   = Math.round((_usedRam / _totalRam) * 100);
+            const _rssMB    = (_mem.rss / 1024 / 1024).toFixed(1);
+            const _totalRamMB = Math.round(_totalRam / 1024 / 1024);
+            const _ramPct   = Math.min(100, Math.round((_mem.rss / _totalRam) * 100));
             const _barLen   = 10;
             const _filled   = Math.round((_ramPct / 100) * _barLen);
             const _ramBar   = "█".repeat(_filled) + "░".repeat(_barLen - _filled);
-            const _heapMB   = (_mem.heapUsed / 1024 / 1024).toFixed(1);
-            const _heapTotMB= (_mem.heapTotal / 1024 / 1024).toFixed(1);
             const _uptimeSec= Math.floor(process.uptime());
             const _uh       = Math.floor(_uptimeSec / 3600);
             const _um       = Math.floor((_uptimeSec % 3600) / 60);
@@ -3108,8 +3107,8 @@ async function startBot() {
               `⟡ ☁ *Platform* :: ${_platName}\n` +
               `⟡ 📡 *Status*   :: ${_statusStr}\n` +
               `⟡ ⏱ *Uptime*   :: ${_uptimeStr}\n` +
-              `⟡ 💾 *RAM*      :: ${_ramBar} ${_ramPct}%\n` +
-              `⟡ 🧬 *Memory*   :: ${_heapMB}MB / ${_heapTotMB}MB\n\n` +
+              `⟡ 💾 *RAM*      :: ${_ramBar} ${_ramPct}% (${_rssMB}MB)\n` +
+              `⟡ 🧬 *Memory*   :: ${_rssMB}MB / ${_totalRamMB}MB\n\n` +
               `╭━━━〔 ⚙️ *SYSTEM CORE* 〕━━━⬣\n` +
               `┃ ⌬ ${_pfx}menu\n` +
               `┃ ⌬ ${_pfx}help\n` +
