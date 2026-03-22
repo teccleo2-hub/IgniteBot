@@ -1393,9 +1393,22 @@ db.init()
     const envSession = process.env.SESSION_ID || process.env.SESSION || null;
     const sessionToRestore = dbSession?.id || envSession || null;
     if (sessionToRestore) {
-      const src = dbSession?.id ? "database (latest)" : "SESSION / SESSION_ID env var";
+      const fromEnvOnly = !dbSession?.id && !!envSession;
+      const src = fromEnvOnly ? "SESSION / SESSION_ID env var" : "database (latest)";
       console.log(`📦 Restoring WhatsApp session from ${src}...`);
       await restoreSession(sessionToRestore);
+      // If the session came from the env var (DB was empty), immediately write it to
+      // the database so it survives the next Heroku dyno restart even if the dyno is
+      // killed before WhatsApp finishes the handshake and the periodic save fires.
+      if (fromEnvOnly) {
+        try {
+          const sid = encodeSession();
+          if (sid) {
+            db.write("_latestSession", { id: sid });
+            console.log("💾 Session pre-saved to database (env-var bootstrap).");
+          }
+        } catch (_) {}
+      }
     }
     return startBot();
   })

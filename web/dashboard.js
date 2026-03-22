@@ -300,6 +300,9 @@ tr:last-child td{border-bottom:none}
     <!-- Heroku-specific fields (shown only when Heroku selected) -->
     <div id="herokuFields" class="platform-section hidden">
       <h3>🟣 Heroku Configuration</h3>
+      <div class="alert alert-warn" style="margin-bottom:14px">
+        ⚠️ <strong>Disable GitHub auto-deploy on Heroku</strong> — Go to your Heroku app → <em>Deploy</em> tab → <em>Automatic deploys</em> → click <strong>Disable Automatic Deploys</strong>. Every code push to GitHub triggers a Heroku restart mid-connection, which can wipe the active WhatsApp session before it is saved.
+      </div>
       <div class="form-row">
         <div class="form-group" style="margin-bottom:0">
           <label>Heroku API Key</label>
