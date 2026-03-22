@@ -1663,6 +1663,69 @@ async function startBot() {
           return;
         }
 
+        // ── .delete / .del — delete a quoted message (group admin only) ───────
+        if (_cmd === "delete" || _cmd === "del") {
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          if (!msg.quoted) {
+            await sock.sendMessage(from, { text: "❌ Reply to a message to delete it." }, { quoted: msg });
+            return;
+          }
+          try {
+            const parts   = await admin.getGroupParticipants(sock, from).catch(() => []);
+            const botJid  = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+            const botAdm  = parts.some(p => p.id === botJid && (p.admin === "admin" || p.admin === "superadmin"));
+            const sndAdm  = admin.isAdmin(senderJid, parts);
+            if (!botAdm) {
+              await sock.sendMessage(from, { text: "❌ I need to be a group admin to delete messages." }, { quoted: msg });
+              return;
+            }
+            if (!sndAdm) {
+              await sock.sendMessage(from, { text: "❌ Only admins can use this command." }, { quoted: msg });
+              return;
+            }
+            await sock.sendMessage(from, {
+              delete: {
+                remoteJid:   from,
+                fromMe:      false,
+                id:          msg.quoted.key.id,
+                participant: msg.quoted.sender,
+              },
+            });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Delete failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .leave — bot says goodbye and leaves the group ──────────────────
+        if (_cmd === "leave") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          try {
+            const meta         = await sock.groupMetadata(from).catch(() => null);
+            const participants = meta?.participants || [];
+            const mentions     = participants.map(p => p.id);
+            const botName      = settings.get("botName") || "NEXUS-MD";
+            await sock.sendMessage(from, {
+              text:     `𝗚𝗼𝗼𝗱𝗯𝘆𝗲 𝗲𝘃𝗲𝗿𝘆𝗼𝗻𝗲 👋\n${botName} 𝗶𝘀 𝗟𝗲𝗮𝘃𝗶𝗻𝗴 𝘁𝗵𝗲 𝗚𝗿𝗼𝘂𝗽 𝗻𝗼𝘄...`,
+              mentions,
+            }, { quoted: msg });
+            await sock.groupLeave(from);
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed to leave: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .sticker / .s — convert quoted image or video to sticker ─────────
         if (_cmd === "sticker" || _cmd === "s") {
           const quotedMsg = msg.quoted?.message || null;
@@ -2092,6 +2155,12 @@ async function startBot() {
             `║\n` +
             `║  ◈ 📋 *${_mPfx}list / ${_mPfx}vars*\n` +
             `║     Show the full command list\n` +
+            `║\n` +
+            `║  ◈ 🗑️ *${_mPfx}delete / ${_mPfx}del*\n` +
+            `║     Reply to a message to delete it (group admins)\n` +
+            `║\n` +
+            `║  ◈ 🚪 *${_mPfx}leave*\n` +
+            `║     Bot says goodbye and leaves the group (owner)\n` +
             `║\n` +
             `╚════════════════════════════════╝`,
         }, { quoted: msg });
