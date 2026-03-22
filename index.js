@@ -3090,7 +3090,7 @@ async function startBot() {
             const _platInfo = platform.get();
             const _platName = _platInfo.name || "Replit";
             const _botName  = settings.get("botName") || "NEXUS-MD";
-            const _senderNum= phone ? `+${phone}` : senderJid.split("@")[0];
+            const _senderNum= msg.pushName || (phone ? `+${phone}` : senderJid.split("@")[0]);
             const _ownerNums= (require("./config").admins || []);
             const _ownerStr = _ownerNums.length ? `+${_ownerNums[0]}` : "Nexus Tech";
             const _statusStr= botStatus === "connected" ? "Online ✅" : "Offline ❌";
