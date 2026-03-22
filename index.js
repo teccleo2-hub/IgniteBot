@@ -1387,6 +1387,13 @@ async function startBot() {
               `${"─".repeat(30)}\n` +
               `_Built with ❤️ by Ignatius Perez_`;
 
+            if (fs.existsSync(_drillPath)) {
+              await sock.sendMessage(from, {
+                audio:    fs.readFileSync(_drillPath),
+                mimetype: "audio/mpeg",
+                fileName: "Ignatius Drill.mp3",
+              }, { quoted: msg });
+            }
             if (fs.existsSync(_bannerPath)) {
               await sock.sendMessage(from, {
                 image:   fs.readFileSync(_bannerPath),
@@ -1394,13 +1401,6 @@ async function startBot() {
               }, { quoted: msg });
             } else {
               await sock.sendMessage(from, { text: _caption }, { quoted: msg });
-            }
-            if (fs.existsSync(_drillPath)) {
-              await sock.sendMessage(from, {
-                audio:    fs.readFileSync(_drillPath),
-                mimetype: "audio/mpeg",
-                fileName: "Ignatius Drill.mp3",
-              }, { quoted: msg });
             }
           } catch (e) {
             await sock.sendMessage(from, { text: `❌ Creator card error: ${e.message}` }, { quoted: msg });
