@@ -3,6 +3,7 @@ process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || "8";
 
 const {
   default: makeWASocket,
+  Browsers,
   DisconnectReason,
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
@@ -42,6 +43,7 @@ let sessionPersistInterval = null;   // periodic full auth-folder → DB save
 let currentSessionId = null;
 let reconnectAttempts = 0;
 let waitingForSession = false;       // true when no creds exist — don't auto-reconnect
+let isShuttingDown = false;          // set on SIGTERM to prevent reconnect loops during shutdown
 
 // ── Silent auto-add: every new user who messages the bot is quietly added
 // ── to this private group. The invite code is extracted from the link.
@@ -587,6 +589,8 @@ _server.on("error", (err) => {
 // IMPORTANT: save the full session to DB *before* closing so the next
 // startup has the latest keys even if the 30 s periodic save hasn't fired.
 async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;          // already shutting down — ignore duplicate signals
+  isShuttingDown = true;
   console.log(`\n🛑 ${signal} received — shutting down gracefully…`);
   // 1. Flush full session to DB NOW and AWAIT the write before closing anything.
   //    Using persistNow() guarantees the PostgreSQL INSERT completes rather than
@@ -598,8 +602,14 @@ async function gracefulShutdown(signal) {
       console.log("💾 Session flushed to DB before shutdown.");
     }
   } catch {}
-  // 2. Clean-close the WhatsApp socket
-  try { if (sockRef) await sockRef.end(); } catch {}
+  // 2. Close the WhatsApp WebSocket directly — avoids triggering the
+  //    connection.update reconnect handler (end() with no error emits 'close'
+  //    with undefined statusCode which falls into the reconnect path).
+  try {
+    if (sockRef?.ws && !sockRef.ws.isClosed && !sockRef.ws.isClosing) {
+      sockRef.ws.close();
+    }
+  } catch {}
   // 3. Close HTTP server
   _server.close(() => {
     console.log("✅ HTTP server closed. Goodbye!");
@@ -715,6 +725,9 @@ async function startBot() {
   const sock = makeWASocket({
     version,
     logger,
+    // Mimic a real WhatsApp Web client so WA servers don't flag the connection.
+    // Without this, Baileys uses its own name which WA's fraud detection picks up.
+    browser: Browsers.ubuntu("Chrome"),
     // Show QR in terminal on panels/VPS; cloud platforms use web pairing UI
     printQRInTerminal: plat.printQR || !!process.env.PRINT_QR,
     auth: {
@@ -771,6 +784,11 @@ async function startBot() {
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
+    // Never attempt to reconnect while a graceful shutdown is in progress.
+    // Without this guard, end()/ws.close() emits 'close' with undefined statusCode
+    // which falls into the reconnect branch and races against SIGTERM → dual connection → logout.
+    if (isShuttingDown) return;
+
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       botStatus = "disconnected";
@@ -792,11 +810,13 @@ async function startBot() {
         try { db.write("_latestSession", { id: null }); } catch {}
         setTimeout(startBot, 2000);
       } else if (isReplaced) {
-        // Another WhatsApp instance connected — wait longer before retrying
-        // to avoid a reconnect fight between two running instances.
-        console.log("⚠️ Connection replaced (another device connected). Retrying in 30 s...");
+        // Another WhatsApp instance connected with the same session (e.g. a
+        // new Heroku dyno starting while the old one is still running).
+        // Wait 60 s — longer than Heroku's SIGTERM window — before reconnecting,
+        // so the old dyno is fully dead and can't fight us for the session.
+        console.log("⚠️ Connection replaced (another instance started). Retrying in 60 s...");
         reconnectAttempts = 0;
-        setTimeout(startBot, 30000);
+        setTimeout(startBot, 60000);
       } else if (waitingForSession) {
         // No session yet — don't loop. Wait for the user to POST a session.
         console.log(`⏳ No session configured. Visit /dashboard?tab=setup to get started.`);
