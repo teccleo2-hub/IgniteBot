@@ -19,6 +19,7 @@ const path = require("path");
 const commands = require("./lib/commands");
 const groups = require("./lib/groups");
 const security = require("./lib/security");
+const handleProtocolMessage = require("./lib/antidelete");
 const broadcast = require("./lib/broadcast");
 const settings = require("./lib/settings");
 const admin = require("./lib/admin");
@@ -1055,8 +1056,15 @@ async function startBot() {
       "";
     const msgType = getContentType(_normalized) || getContentType(_inner) || Object.keys(msg.message || {})[0] || "unknown";
 
-    // Skip internal WhatsApp protocol messages — they are not real user messages
-    if (msgType === "protocolMessage" || msgType === "senderKeyDistributionMessage") return;
+    // ── protocolMessage: antidelete / antiedit intercept ─────────────────────
+    if (msgType === "protocolMessage") {
+      const ownerJid = botPhoneNumber ? `${botPhoneNumber}@s.whatsapp.net` : null;
+      await handleProtocolMessage(sock, msg, settings, security, _mediaBufferCache, ownerJid)
+        .catch(e => console.error("[antidelete] error:", e.message));
+      return;
+    }
+    // Skip other internal WhatsApp protocol messages
+    if (msgType === "senderKeyDistributionMessage") return;
 
     console.log(`[MSG←] from=${senderJid?.split("@")[0]} type=${msgType} body="${body.slice(0, 50)}" fromMe=${msg.key.fromMe}`);
 
@@ -1324,7 +1332,7 @@ async function startBot() {
             await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
             return;
           }
-          const VALID_MODES = ["off", "on", "group", "chat", "both", "all", "status"];
+          const VALID_MODES = ["off", "on", "private", "group", "chat", "both", "all", "status"];
           let val = _args.toLowerCase().trim();
           if (val === "on") val = "both";
           if (!VALID_MODES.includes(val)) {
@@ -1343,6 +1351,34 @@ async function startBot() {
           settings.set("antiDeleteMode", val);
           await sock.sendMessage(from, {
             text: `✅ Anti-Delete set to *${val.toUpperCase()}*`,
+          }, { quoted: msg });
+          return;
+        }
+
+        // ── .antiedit ──────────────────────────────────────────────────────
+        if (_cmd === "antiedit") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          const VALID_MODES = ["off", "on", "private", "chat", "group", "both", "all"];
+          let val = _args.toLowerCase().trim();
+          if (val === "on") val = "both";
+          if (!VALID_MODES.includes(val)) {
+            const cur = settings.get("antiEditMode") || "off";
+            await sock.sendMessage(from, {
+              text: `⚙️ *Anti-Edit*\n\nUsage: \`${_pfx}antiedit [on|off|private|chat|both|all]\`\n\n` +
+                    `• *private* — notify owner's DM only\n` +
+                    `• *chat* — repost in the same chat\n` +
+                    `• *on / both* — both chat + owner DM\n` +
+                    `• *off* — disabled\n\n` +
+                    `Current: \`${cur}\``,
+            }, { quoted: msg });
+            return;
+          }
+          settings.set("antiEditMode", val);
+          await sock.sendMessage(from, {
+            text: `✅ Anti-Edit set to *${val.toUpperCase()}*`,
           }, { quoted: msg });
           return;
         }
@@ -1545,6 +1581,7 @@ async function startBot() {
             prefixless:      "prefixless",
             voreveal:        "voReveal",
             antideletestatus:"antiDeleteStatus",
+            antiedit:        "antiEditMode",
           };
           const parts   = _args.trim().split(/\s+/);
           const fName   = (parts[0] || "").toLowerCase();
