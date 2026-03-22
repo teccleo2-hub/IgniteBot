@@ -369,6 +369,16 @@ app.post("/session", async (req, res) => {
       error: "Could not restore session. Make sure it is a valid Baileys creds.json (any format)."
     });
 
+    // Pre-save to DB immediately — protects against SIGTERM arriving before
+    // WhatsApp finishes the handshake (same race that affected env-var boot).
+    try {
+      const sid = encodeSession();
+      if (sid) {
+        db.write("_latestSession", { id: sid });
+        console.log("💾 Session pre-saved to database (POST /session).");
+      }
+    } catch (_) {}
+
     res.json({ ok: true, message: "Session saved. Reconnecting bot..." });
 
     waitingForSession = false;
@@ -395,6 +405,15 @@ app.post("/session/url", async (req, res) => {
     console.log(`📥 Loading session from URL: ${url}`);
     const ok = await restoreSession(url);
     if (!ok) return res.status(500).json({ error: "Could not load a valid session from that URL." });
+
+    // Pre-save to DB immediately — same SIGTERM race protection as /session.
+    try {
+      const sid = encodeSession();
+      if (sid) {
+        db.write("_latestSession", { id: sid });
+        console.log("💾 Session pre-saved to database (POST /session/url).");
+      }
+    } catch (_) {}
 
     res.json({ ok: true, message: "Session loaded from URL. Reconnecting bot..." });
 
@@ -534,11 +553,13 @@ _server.on("error", (err) => {
 // startup has the latest keys even if the 30 s periodic save hasn't fired.
 async function gracefulShutdown(signal) {
   console.log(`\n🛑 ${signal} received — shutting down gracefully…`);
-  // 1. Flush full session to DB NOW before anything closes
+  // 1. Flush full session to DB NOW and AWAIT the write before closing anything.
+  //    Using persistNow() guarantees the PostgreSQL INSERT completes rather than
+  //    relying on the fire-and-forget db.write() path.
   try {
     const sid = encodeSession();
     if (sid) {
-      db.write("_latestSession", { id: sid });
+      await db.persistNow("_latestSession", { id: sid });
       console.log("💾 Session flushed to DB before shutdown.");
     }
   } catch {}
