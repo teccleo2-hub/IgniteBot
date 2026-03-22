@@ -797,6 +797,7 @@ function generateHerokuFill() {
   const deployRows = [
     { key: 'HEROKU_API', val: apiKey || '(your Heroku API key from dashboard.heroku.com/account)', label: 'Heroku API Key' },
     { key: 'ADMIN_NUMBERS', val: phone || '(your WhatsApp number without +)', label: 'Owner Phone' },
+    { key: 'SESSION_ID', val: sessionId || '(get from nexs-session-1.replit.app or Session ID tab)', label: 'Session ID' },
     { key: 'DATABASE_URL', val: '(auto-filled by Heroku Postgres add-on — leave blank)', label: 'Database URL' },
     { key: 'BOTNAME', val: botname, label: 'Bot Name' },
   ];
