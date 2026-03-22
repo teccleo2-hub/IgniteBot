@@ -1617,6 +1617,67 @@ async function startBot() {
           return;
         }
 
+        // ── .block ─────────────────────────────────────────────────────────
+        if (_cmd === "block") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          let target = msg.mentionedJids?.[0]
+            || (msg.quoted ? msg.quoted.sender : null)
+            || (_args ? _args.replace(/[^0-9]/g, "") + "@s.whatsapp.net" : null);
+          if (!target) {
+            await sock.sendMessage(from, {
+              text: `⚙️ *Block*\n\nUsage: \`${_pfx}block\` while replying to or mentioning a user.\n\nBlocks a user from messaging the bot.`,
+            }, { quoted: msg });
+            return;
+          }
+          // Prevent blocking the bot itself
+          const _botJid = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+          if (target === _botJid) {
+            await sock.sendMessage(from, { text: "❌ I cannot block myself!" }, { quoted: msg });
+            return;
+          }
+          // Prevent blocking any super-admin/owner
+          if (admin.isSuperAdmin(target)) {
+            await sock.sendMessage(from, { text: "❌ I cannot block my Owner! 😡" }, { quoted: msg });
+            return;
+          }
+          try {
+            await sock.updateBlockStatus(target, "block");
+            const _num = target.split("@")[0];
+            await sock.sendMessage(from, { text: `✅ *Blocked* +${_num} successfully!` }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed to block: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .unblock ───────────────────────────────────────────────────────
+        if (_cmd === "unblock") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          let target = msg.mentionedJids?.[0]
+            || (msg.quoted ? msg.quoted.sender : null)
+            || (_args ? _args.replace(/[^0-9]/g, "") + "@s.whatsapp.net" : null);
+          if (!target) {
+            await sock.sendMessage(from, {
+              text: `⚙️ *Unblock*\n\nUsage: \`${_pfx}unblock\` while replying to or mentioning a user.\n\nUnblocks a previously blocked user.`,
+            }, { quoted: msg });
+            return;
+          }
+          try {
+            await sock.updateBlockStatus(target, "unblock");
+            const _num = target.split("@")[0];
+            await sock.sendMessage(from, { text: `✅ *Unblocked* +${_num} successfully! ✅` }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed to unblock: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .prefixless ────────────────────────────────────────────────────
         if (_cmd === "prefixless") {
           if (!_isOwner) {
@@ -1649,6 +1710,31 @@ async function startBot() {
     await commands.handle(sock, msg).catch(err => {
       console.error(`[CMD✗] from=${msg.sender?.split("@")[0]} body="${body.slice(0,40)}" err=${err.message}`);
     });
+
+    // ── Menu hook: append owner commands (block/unblock) after main menu ──────
+    {
+      const _mPfx        = settings.get("prefix") || ".";
+      const _mPrefixless = !!settings.get("prefixless");
+      let _mRest = null;
+      if (body.startsWith(_mPfx))  _mRest = body.slice(_mPfx.length).trim();
+      else if (_mPrefixless)        _mRest = body.trim();
+      const _mCmd = (_mRest || "").split(/\s+/)[0]?.toLowerCase() || "";
+      const _mIsOwner = msg.key.fromMe === true || admin.isSuperAdmin(senderJid);
+      if (_mCmd === "menu" && _mIsOwner) {
+        await sock.sendMessage(from, {
+          text:
+            `╔═══「 🔒 *ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ* 🔒 」═══╗\n` +
+            `║\n` +
+            `║  ◈ 🚫 *${_mPfx}block*\n` +
+            `║     Reply to / mention a user to block them\n` +
+            `║\n` +
+            `║  ◈ ✅ *${_mPfx}unblock*\n` +
+            `║     Reply to / mention a user to unblock them\n` +
+            `║\n` +
+            `╚════════════════════════════════╝`,
+        }, { quoted: msg });
+      }
+    }
 
     // ── Chatbot — AI reply to all messages when enabled ──────────────────────
     const pfx = settings.get("prefix") || ".";
