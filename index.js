@@ -732,6 +732,42 @@ async function startBot() {
 
   sockRef = sock;
 
+  // Wrap sendMessage with logging, 90s timeout guard, and one auto-retry for media
+  const _origSendMessage = sock.sendMessage.bind(sock);
+  const _sendWithTimeout = (jid, content, opts) =>
+    Promise.race([
+      _origSendMessage(jid, content, opts),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("media upload timeout after 90s")), 90000)),
+    ]);
+  sock.sendMessage = async (jid, content, opts) => {
+    const mtype = Object.keys(content)[0];
+    const isMedia = ["image","video","audio","document","sticker"].includes(mtype);
+    console.log(`[SEND→] to=${jid?.split("@")[0]} type=${mtype}${isMedia ? " (media)" : ""}`);
+    try {
+      const result = isMedia
+        ? await _sendWithTimeout(jid, content, opts)
+        : await _origSendMessage(jid, content, opts);
+      console.log(`[SEND✓] to=${jid?.split("@")[0]} type=${mtype}`);
+      return result;
+    } catch (firstErr) {
+      if (isMedia) {
+        // One automatic retry for media after a short pause (handles transient upload failures)
+        console.warn(`[SEND↺] retrying ${mtype} to=${jid?.split("@")[0]} after err: ${firstErr.message}`);
+        await new Promise(r => setTimeout(r, 3000));
+        try {
+          const result = await _sendWithTimeout(jid, content, opts);
+          console.log(`[SEND✓] to=${jid?.split("@")[0]} type=${mtype} (retry)`);
+          return result;
+        } catch (retryErr) {
+          console.error(`[SEND✗] to=${jid?.split("@")[0]} type=${mtype} err=${retryErr.message} (after retry)`);
+          throw retryErr;
+        }
+      }
+      console.error(`[SEND✗] to=${jid?.split("@")[0]} type=${mtype} err=${firstErr.message}`);
+      throw firstErr;
+    }
+  };
+
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
@@ -895,6 +931,8 @@ async function startBot() {
 
     // Skip internal WhatsApp protocol messages — they are not real user messages
     if (msgType === "protocolMessage" || msgType === "senderKeyDistributionMessage") return;
+
+    console.log(`[MSG←] from=${senderJid?.split("@")[0]} type=${msgType} body="${body.slice(0, 50)}" fromMe=${msg.key.fromMe}`);
 
     // Extract context info (quoted message, mentions, expiry)
     const _ctxInfo =
@@ -1112,7 +1150,12 @@ async function startBot() {
     }
 
     // ── Commands — processed immediately after typing indicator ───────────────
-    await commands.handle(sock, msg).catch(err => console.error("Command error:", err.message));
+    if (body.startsWith(settings.get("prefix") || ".") || msg.key.fromMe === false) {
+      console.log(`[CMD→] from=${msg.sender?.split("@")[0]} body="${body.slice(0, 60)}" fromMe=${msg.key.fromMe}`);
+    }
+    await commands.handle(sock, msg).catch(err => {
+      console.error(`[CMD✗] from=${msg.sender?.split("@")[0]} body="${body.slice(0,40)}" err=${err.message}`);
+    });
 
     // ── Chatbot — AI reply to all messages when enabled ──────────────────────
     const pfx = settings.get("prefix") || ".";
