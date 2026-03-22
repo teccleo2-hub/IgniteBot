@@ -1663,6 +1663,106 @@ async function startBot() {
           return;
         }
 
+        // ── .approve / .approve-all — approve pending join requests ─────────
+        if (_cmd === "approve" || _cmd === "approve-all") {
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          try {
+            const parts  = await admin.getGroupParticipants(sock, from).catch(() => []);
+            const botJid = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+            const botAdm = parts.some(p => p.id === botJid && (p.admin === "admin" || p.admin === "superadmin"));
+            if (!botAdm) {
+              await sock.sendMessage(from, { text: "❌ I need to be a group admin to approve requests." }, { quoted: msg });
+              return;
+            }
+            if (!admin.isAdmin(senderJid, parts)) {
+              await sock.sendMessage(from, { text: "❌ Only admins can use this command." }, { quoted: msg });
+              return;
+            }
+            const pending = await sock.groupRequestParticipantsList(from);
+            if (!pending?.length) {
+              await sock.sendMessage(from, {
+                text: "ℹ️ No pending join requests at this time.",
+              }, { quoted: msg });
+              return;
+            }
+            for (const p of pending) {
+              await sock.groupRequestParticipantsUpdate(from, [p.jid], "approve").catch(() => {});
+            }
+            await sock.sendMessage(from, {
+              text: `✅ ${pending.length} pending participant(s) have been approved!`,
+            }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed to approve requests: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .reject / .reject-all — reject pending join requests ─────────────
+        if (_cmd === "reject" || _cmd === "reject-all") {
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          try {
+            const parts  = await admin.getGroupParticipants(sock, from).catch(() => []);
+            const botJid = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+            const botAdm = parts.some(p => p.id === botJid && (p.admin === "admin" || p.admin === "superadmin"));
+            if (!botAdm) {
+              await sock.sendMessage(from, { text: "❌ I need to be a group admin to reject requests." }, { quoted: msg });
+              return;
+            }
+            if (!admin.isAdmin(senderJid, parts)) {
+              await sock.sendMessage(from, { text: "❌ Only admins can use this command." }, { quoted: msg });
+              return;
+            }
+            const pending = await sock.groupRequestParticipantsList(from);
+            if (!pending?.length) {
+              await sock.sendMessage(from, {
+                text: "ℹ️ No pending join requests at this time.",
+              }, { quoted: msg });
+              return;
+            }
+            for (const p of pending) {
+              await sock.groupRequestParticipantsUpdate(from, [p.jid], "reject").catch(() => {});
+            }
+            await sock.sendMessage(from, {
+              text: `🚫 ${pending.length} pending participant(s) have been rejected!`,
+            }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed to reject requests: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .admin — promote owner/self to group admin ────────────────────────
+        if (_cmd === "admin") {
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ This command is for the owner only." }, { quoted: msg });
+            return;
+          }
+          try {
+            const parts  = await admin.getGroupParticipants(sock, from).catch(() => []);
+            const botJid = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+            const botAdm = parts.some(p => p.id === botJid && (p.admin === "admin" || p.admin === "superadmin"));
+            if (!botAdm) {
+              await sock.sendMessage(from, { text: "❌ I need to be a group admin to promote anyone." }, { quoted: msg });
+              return;
+            }
+            await sock.groupParticipantsUpdate(from, [senderJid], "promote");
+            await sock.sendMessage(from, { text: "🥇 Promoted to Admin!" }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .inspect — crawl a website: HTML, CSS, JS, media ────────────────
         if (_cmd === "inspect") {
           if (!_args.trim()) {
@@ -3090,6 +3190,15 @@ async function startBot() {
             `║\n` +
             `║  ◈ 🖼️ *${_mPfx}icon*\n` +
             `║     Set group profile picture from quoted image\n` +
+            `║\n` +
+            `║  ◈ ✅ *${_mPfx}approve / ${_mPfx}approve-all*\n` +
+            `║     Approve all pending group join requests\n` +
+            `║\n` +
+            `║  ◈ 🚫 *${_mPfx}reject / ${_mPfx}reject-all*\n` +
+            `║     Reject all pending group join requests\n` +
+            `║\n` +
+            `║  ◈ 🥇 *${_mPfx}admin*\n` +
+            `║     Promote yourself to group admin (owner only)\n` +
             `║\n` +
             `╚════════════════════════════════╝`,
         }, { quoted: msg });
