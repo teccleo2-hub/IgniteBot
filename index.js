@@ -714,6 +714,36 @@ function _cacheMsg(msg) {
   }
 }
 
+// Media buffer cache — stores downloaded media buffers keyed by message ID.
+// Populated eagerly on arrival so antidelete can recover media even after
+// the WhatsApp CDN URL has expired (which happens within minutes of sending).
+const _mediaBufferCache = new Map();
+const _MEDIA_TYPES_AD = new Set(["imageMessage","videoMessage","audioMessage","stickerMessage","documentMessage","ptvMessage"]);
+async function _eagerCacheMedia(msg) {
+  try {
+    if (!msg?.key?.id || !msg.message) return;
+    const msgType = Object.keys(msg.message)[0];
+    if (!_MEDIA_TYPES_AD.has(msgType)) return;
+    const buf = await downloadMediaMessage(msg, "buffer", {}).catch(() => null);
+    if (!buf) return;
+    const msgData = msg.message[msgType] || {};
+    _mediaBufferCache.set(msg.key.id, {
+      buffer:   buf,
+      mimetype: msgData.mimetype || null,
+      msgType,
+      ptt:      msgData.ptt || false,
+      caption:  msgData.caption || null,
+      fileName: msgData.fileName || null,
+      gifPlayback: msgData.gifPlayback || false,
+    });
+    // Keep cache bounded — drop oldest entries above 200
+    if (_mediaBufferCache.size > 200) {
+      const oldest = _mediaBufferCache.keys().next().value;
+      _mediaBufferCache.delete(oldest);
+    }
+  } catch {}
+}
+
 async function startBot() {
   // If the auth folder is empty or missing (e.g. container restarted mid-cycle
   // and the startup DB-restore ran but was skipped this call), try the DB again.
@@ -1722,6 +1752,9 @@ async function startBot() {
         security.cacheStatus(msg.key.id, msg);
       } else {
         security.cacheMessage(msg.key.id, msg);
+        // Eagerly download and store the media buffer so antidelete can
+        // recover it even after the WhatsApp CDN URL expires on deletion.
+        _eagerCacheMedia(msg).catch(() => {});
       }
 
       // DB log — use normalizeMessageContent for accurate body extraction
@@ -1871,13 +1904,32 @@ async function startBot() {
           return;
         }
 
-        const mediaBuf = await downloadMediaMessage(original, "buffer", {}).catch(() => null);
+        // Prefer the eagerly-cached buffer (downloaded on arrival, before CDN URL expired)
+        const _eagerEntry = _mediaBufferCache.get(original.key?.id);
+        let mediaBuf = _eagerEntry?.buffer || null;
+        let msgData  = original.message[msgType] || {};
+
+        // Override msgData fields from eager cache when available (more reliable)
+        if (_eagerEntry) {
+          msgData = {
+            mimetype:    _eagerEntry.mimetype    || msgData.mimetype,
+            ptt:         _eagerEntry.ptt         ?? msgData.ptt,
+            caption:     _eagerEntry.caption     || msgData.caption,
+            fileName:    _eagerEntry.fileName    || msgData.fileName,
+            gifPlayback: _eagerEntry.gifPlayback ?? msgData.gifPlayback,
+          };
+        }
+
+        // Fallback: try live download if eager buffer is missing
         if (!mediaBuf) {
-          await sock.sendMessage(destJid, { text: `${header}\n\n_[Media could not be retrieved]_` }).catch(() => {});
+          mediaBuf = await downloadMediaMessage(original, "buffer", {}).catch(() => null);
+        }
+
+        if (!mediaBuf) {
+          await sock.sendMessage(destJid, { text: `${header}\n\n_[Media could not be retrieved — it may have expired]_` }).catch(() => {});
           return;
         }
 
-        const msgData  = original.message[msgType] || {};
         const caption  = (msgData.caption ? `\n_${msgData.caption}_` : "");
 
         if (msgType === "stickerMessage") {
