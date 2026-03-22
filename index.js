@@ -1663,6 +1663,34 @@ async function startBot() {
           return;
         }
 
+        // ── .tts / .say — text-to-speech via Google TTS ────────────────────
+        if (_cmd === "tts" || _cmd === "say") {
+          if (!_args.trim()) {
+            await sock.sendMessage(from, {
+              text: `🔊 Usage: \`${_pfx}${_cmd} <text>\`\n\nConverts your text to a voice note.`,
+            }, { quoted: msg });
+            return;
+          }
+          try {
+            const googleTTS = require("google-tts-api");
+            const audioUrl  = googleTTS.getAudioUrl(_args.trim(), {
+              lang: "hi-IN",
+              slow: false,
+              host: "https://translate.google.com",
+            });
+            await sock.sendMessage(from, {
+              audio: { url: audioUrl },
+              mimetype: "audio/mp4",
+              ptt: true,
+            }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, {
+              text: `❌ TTS failed: ${e.message}`,
+            }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .add — add member(s) to the group ──────────────────────────────
         if (_cmd === "add") {
           if (!from.endsWith("@g.us")) {
@@ -2336,6 +2364,9 @@ async function startBot() {
             `║  ◈ ➕ *${_mPfx}add <number(s)>*\n` +
             `║     Add member(s) to the group (group admin only)\n` +
             `║     Comma-separate for multiple numbers\n` +
+            `║\n` +
+            `║  ◈ 🔊 *${_mPfx}tts / ${_mPfx}say <text>*\n` +
+            `║     Convert text to a Hindi voice note\n` +
             `║\n` +
             `╚════════════════════════════════╝`,
         }, { quoted: msg });
