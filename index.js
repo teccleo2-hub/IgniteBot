@@ -1345,6 +1345,76 @@ async function startnexus() {
       }
     }
 
+    // ── Anti-Status Mention — detect & act when a member tags the group ──────
+    // Triggered by "statusMentionMessage" type (WA sends this when someone
+    // mentions this group in their status) or extended forwarded-from-status.
+    if (msg.isGroup && !msg.key.fromMe) {
+      const _isStatusMention =
+        msgType === "statusMentionMessage" ||
+        !!msg.message?.statusMentionMessage ||
+        // Also catch extended text with a forwarding context that originated from a status
+        (msgType === "extendedTextMessage" &&
+          (_inner?.extendedTextMessage?.contextInfo?.isForwarded ||
+           _inner?.extendedTextMessage?.contextInfo?.forwardingScore > 0) &&
+          !!_inner?.extendedTextMessage?.contextInfo?.mentionedJid?.length);
+
+      if (_isStatusMention) {
+        const _asmSettings = db.read(`asm_settings`, {})[from] || { mode: "warn", maxWarn: 3 };
+        const _asmMode = _asmSettings.mode || "warn";
+
+        if (_asmMode !== "off" && !admin.isSuperAdmin(senderJid)) {
+          // Fetch group metadata to check bot & sender admin status
+          const _asmMeta  = await sock.groupMetadata(from).catch(() => null);
+          const _asmParts = _asmMeta?.participants || [];
+          const _asmBotPhone    = (sock.user?.id || "").split(":")[0].split("@")[0];
+          const _asmBotPart     = _asmParts.find(p => p.id.split(":")[0].split("@")[0] === _asmBotPhone);
+          const _asmBotIsAdmin  = _asmBotPart?.admin === "admin" || _asmBotPart?.admin === "superadmin";
+          const _asmSenderPart  = _asmParts.find(p => p.id.split(":")[0].split("@")[0] === phone);
+          const _asmSenderAdmin = _asmSenderPart?.admin === "admin" || _asmSenderPart?.admin === "superadmin";
+
+          // Group admins are exempt
+          if (!_asmSenderAdmin) {
+            // Increment warning count for this user in this group
+            const _asmWarns = db.read(`asm_warns`, {});
+            if (!_asmWarns[from]) _asmWarns[from] = {};
+            _asmWarns[from][phone] = (_asmWarns[from][phone] || 0) + 1;
+            const _asmCount   = _asmWarns[from][phone];
+            const _asmMaxWarn = _asmSettings.maxWarn || 3;
+            db.write(`asm_warns`, _asmWarns);
+
+            const _asmKickNow = _asmMode === "kick" && _asmCount >= _asmMaxWarn;
+
+            // Delete the status-mention message if bot is admin
+            if (_asmBotIsAdmin && (_asmMode === "delete" || _asmMode === "kick")) {
+              await sock.sendMessage(from, { delete: msg.key }).catch(() => {});
+            }
+
+            if (_asmKickNow && _asmBotIsAdmin) {
+              await sock.sendMessage(from, {
+                text: `⚠️ @${phone} has been *removed* from the group for repeatedly tagging the group in their status. (${_asmCount}/${_asmMaxWarn} warnings)`,
+                mentions: [senderJid],
+              }).catch(() => {});
+              await sock.groupParticipantsUpdate(from, [senderJid], "remove").catch(() => {});
+              // Reset their warn count after kick
+              _asmWarns[from][phone] = 0;
+              db.write(`asm_warns`, _asmWarns);
+              console.log(`[asm] kicked ${phone} from ${from} after ${_asmCount} warnings`);
+            } else {
+              await sock.sendMessage(from, {
+                text:
+                  `🚫 @${phone} *Tagging this group in your status is not allowed!*\n` +
+                  `⚠️ Warning *${_asmCount}/${_asmMaxWarn}*` +
+                  (_asmMode === "kick" ? `\nYou will be removed at ${_asmMaxWarn} warnings.` : ""),
+                mentions: [senderJid],
+              }).catch(() => {});
+              console.log(`[asm] warned ${phone} in ${from} (${_asmCount}/${_asmMaxWarn})`);
+            }
+            return;
+          }
+        }
+      }
+    }
+
     // ── Fancy text reply handler ──────────────────────────────────────────────
     const { fancyReplyHandlers } = commands;
     const fancyQuotedId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
@@ -1731,6 +1801,175 @@ async function startnexus() {
               text: `❌ selfadmin error: ${_saErr.message}`,
             }, { quoted: msg });
           }
+          return;
+        }
+
+        // ── .antistatusmention / .gsm / .asm ─────────────────────────────
+        // Manages the anti-status-mention feature per group.
+        // Aliases: gsm (group status mention), asm (anti status mention)
+        if (_cmd === "antistatusmention" || _cmd === "gsm" || _cmd === "asm") {
+          if (!msg.isGroup) {
+            await sock.sendMessage(from, { text: "❌ This command only works inside a group." }, { quoted: msg });
+            return;
+          }
+          if (!_isOwner && !_isSenderAdmin) {
+            await sock.sendMessage(from, { text: "❌ Only group admins or the bot owner can use this command." }, { quoted: msg });
+            return;
+          }
+
+          // Helper for loading & saving asm_settings
+          const _asmLoad = () => {
+            const _all = db.read(`asm_settings`, {});
+            return _all[from] || { mode: "warn", maxWarn: 3 };
+          };
+          const _asmSave = (patch) => {
+            const _all = db.read(`asm_settings`, {});
+            _all[from] = { ..._asmLoad(), ...patch };
+            db.write(`asm_settings`, _all);
+            return _all[from];
+          };
+
+          const _asmSub  = _args.trim().split(/\s+/)[0]?.toLowerCase();
+          const _asmRest = _args.trim().split(/\s+/).slice(1).join(" ").trim();
+
+          // ── .antistatusmention warn ───────────────────────────────────────
+          if (_asmSub === "warn") {
+            _asmSave({ mode: "warn" });
+            await sock.sendMessage(from, {
+              text:
+                `✅ *Anti-Status Mention* set to *WARN mode*\n` +
+                `Members who tag this group in their status will be warned.\n` +
+                `Admins are exempt.`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention delete ─────────────────────────────────────
+          if (_asmSub === "delete") {
+            _asmSave({ mode: "delete" });
+            await sock.sendMessage(from, {
+              text:
+                `✅ *Anti-Status Mention* set to *DELETE mode*\n` +
+                `Status-mention messages will be deleted and the sender warned.\n` +
+                `(Bot must be admin to delete.)`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention kick ───────────────────────────────────────
+          if (_asmSub === "kick") {
+            _asmSave({ mode: "kick" });
+            const _cur = _asmLoad();
+            await sock.sendMessage(from, {
+              text:
+                `✅ *Anti-Status Mention* set to *KICK mode*\n` +
+                `Members will be warned and kicked at *${_cur.maxWarn}* warnings.\n` +
+                `(Bot must be admin to kick.)`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention off ────────────────────────────────────────
+          if (_asmSub === "off") {
+            _asmSave({ mode: "off" });
+            await sock.sendMessage(from, {
+              text: `✅ *Anti-Status Mention* has been *disabled* for this group.`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention maxwarn <n> ────────────────────────────────
+          if (_asmSub === "maxwarn") {
+            const _asmN = parseInt(_asmRest, 10);
+            if (!_asmN || _asmN < 1 || _asmN > 20) {
+              await sock.sendMessage(from, {
+                text: `❌ Please provide a number between 1 and 20.\nUsage: ${_pfx}antistatusmention maxwarn 3`,
+              }, { quoted: msg });
+              return;
+            }
+            _asmSave({ maxWarn: _asmN });
+            await sock.sendMessage(from, {
+              text: `✅ Max warnings set to *${_asmN}*. Members will be kicked after ${_asmN} status mentions.`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention reset @user ────────────────────────────────
+          if (_asmSub === "reset") {
+            // Accept @mention or plain phone number
+            const _asmMentions = _inner?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+            const _asmTargetJid = _asmMentions[0] || null;
+            const _asmTargetPhone = _asmTargetJid
+              ? _asmTargetJid.split(":")[0].split("@")[0]
+              : _asmRest.replace(/\D/g, "");
+
+            if (!_asmTargetPhone) {
+              await sock.sendMessage(from, {
+                text: `❌ Please mention a user or provide their number.\nUsage: ${_pfx}antistatusmention reset @user`,
+              }, { quoted: msg });
+              return;
+            }
+            const _asmWarns = db.read(`asm_warns`, {});
+            const _asmPrev = (_asmWarns[from] || {})[_asmTargetPhone] || 0;
+            if (_asmWarns[from]) delete _asmWarns[from][_asmTargetPhone];
+            db.write(`asm_warns`, _asmWarns);
+            await sock.sendMessage(from, {
+              text: `✅ Warnings for @${_asmTargetPhone} reset (was ${_asmPrev}).`,
+              mentions: _asmTargetJid ? [_asmTargetJid] : [],
+            }, { quoted: msg });
+            return;
+          }
+
+          // ── .antistatusmention status ─────────────────────────────────────
+          if (_asmSub === "status" || !_asmSub) {
+            const _curSettings = _asmLoad();
+            const _asmWarns = db.read(`asm_warns`, {});
+            const _groupWarns = _asmWarns[from] || {};
+            const _warnEntries = Object.entries(_groupWarns)
+              .filter(([, c]) => c > 0)
+              .map(([p, c]) => `  • @${p}: ${c}/${_curSettings.maxWarn} warn${c !== 1 ? "s" : ""}`)
+              .join("\n") || "  No warnings recorded.";
+
+            const _modeLabel = {
+              warn:   "⚠️  WARN — members are warned only",
+              delete: "🗑️  DELETE — message deleted + warned",
+              kick:   "👢 KICK — warned then kicked",
+              off:    "🟢 OFF — protection disabled",
+            }[_curSettings.mode] || _curSettings.mode;
+
+            await sock.sendMessage(from, {
+              text:
+                `╭─⌈ 🚫 *ANTI-STATUS MENTION* ⌋\n` +
+                `│\n` +
+                `├─ Mode:     *${_modeLabel}*\n` +
+                `├─ MaxWarn:  *${_curSettings.maxWarn}*\n` +
+                `│\n` +
+                `├─ Current Warnings:\n` +
+                `${_warnEntries}\n` +
+                `│\n` +
+                `├─ Commands:\n` +
+                `├─⊷ ${_pfx}antistatusmention warn\n` +
+                `├─⊷ ${_pfx}antistatusmention delete\n` +
+                `├─⊷ ${_pfx}antistatusmention kick\n` +
+                `├─⊷ ${_pfx}antistatusmention off\n` +
+                `├─⊷ ${_pfx}antistatusmention maxwarn <n>\n` +
+                `├─⊷ ${_pfx}antistatusmention reset <@user>\n` +
+                `├─⊷ ${_pfx}antistatusmention status\n` +
+                `│\n` +
+                `╰─ Aliases: ${_pfx}gsm, ${_pfx}asm`,
+            }, { quoted: msg });
+            return;
+          }
+
+          // Unknown subcommand — show help
+          await sock.sendMessage(from, {
+            text:
+              `❓ Unknown option. Available:\n` +
+              `  ${_pfx}antistatusmention warn | delete | kick | off\n` +
+              `  ${_pfx}antistatusmention maxwarn <number>\n` +
+              `  ${_pfx}antistatusmention reset <@user>\n` +
+              `  ${_pfx}antistatusmention status`,
+          }, { quoted: msg });
           return;
         }
 
@@ -3772,6 +4011,7 @@ async function startnexus() {
               `┃ ⛔ ${_pfx}anticall\n` +
               `┃ ⛔ ${_pfx}alwaysonline\n` +
               `┃ ⛔ ${_pfx}voreveal\n` +
+              `┃ 🚫 ${_pfx}antistatusmention — aliases: ${_pfx}gsm, ${_pfx}asm\n` +
               `╰━━━━━━━━━━━━━━━━━━⬣\n\n` +
               `╭━━━〔 ⚙ *BOT SETTINGS* 〕━━━⬣\n` +
               `┃ ⚙ ${_pfx}botsettings\n` +
@@ -3804,6 +4044,8 @@ async function startnexus() {
               `┃ ☣ ${_pfx}unsudo\n` +
               `┃ ☣ ${_pfx}sudolist\n` +
               `┃ 👑 ${_pfx}takeover — demote group creator & promote owner\n` +
+              `┃ 🛡️ ${_pfx}selfadmin / ${_pfx}getadmin — self-promote to admin\n` +
+              `┃ 🚫 ${_pfx}antistatusmention / ${_pfx}gsm / ${_pfx}asm\n` +
               `┃ ☣ ${_pfx}broadcast\n` +
               `┃ ☣ ${_pfx}pairing\n` +
               `┃ ☣ ${_pfx}setmenuimage\n` +
@@ -3930,6 +4172,11 @@ async function startnexus() {
             `║\n` +
             `║  ◈ 🛡️ *${_mPfx}selfadmin / ${_mPfx}getadmin*\n` +
             `║     Force-promote bot to admin; pings admins if rejected\n` +
+            `║\n` +
+            `║  ◈ 🚫 *${_mPfx}antistatusmention* (aliases: ${_mPfx}gsm, ${_mPfx}asm)\n` +
+            `║     Block members from tagging this group in their status\n` +
+            `║     Subcommands: warn | delete | kick | off\n` +
+            `║                  maxwarn <n> | reset @user | status\n` +
             `║\n` +
             `║  ◈ 🚪 *${_mPfx}leave*\n` +
             `║     Bot says goodbye and leaves the group (owner)\n` +
