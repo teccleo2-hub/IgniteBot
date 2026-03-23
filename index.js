@@ -1503,6 +1503,112 @@ async function startnexus() {
           return;
         }
 
+        // ── .takeover ──────────────────────────────────────────────────────
+        // Demotes the group creator and promotes the bot owner to admin.
+        // Only usable by the bot owner, only inside a group.
+        if (_cmd === "takeover") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ This command is for the bot owner only." }, { quoted: msg });
+            return;
+          }
+          if (!msg.isGroup) {
+            await sock.sendMessage(from, { text: "❌ This command can only be used inside a group." }, { quoted: msg });
+            return;
+          }
+          try {
+            // Fetch fresh group metadata
+            const _tMeta = await sock.groupMetadata(from);
+            const _tParts = _tMeta?.participants || [];
+
+            // Bot must be an admin to perform these operations
+            const _tBotPhone = (sock.user?.id || "").split(":")[0].split("@")[0];
+            const _tBotJid   = `${_tBotPhone}@s.whatsapp.net`;
+            const _tBotPart  = _tParts.find(p => p.id.split(":")[0].split("@")[0] === _tBotPhone);
+            const _tBotIsAdmin = _tBotPart?.admin === "admin" || _tBotPart?.admin === "superadmin";
+
+            if (!_tBotIsAdmin) {
+              await sock.sendMessage(from, {
+                text: `❌ *Takeover failed* — I need to be a group admin first.\n\nAsk an existing admin to promote me, then try again.`,
+              }, { quoted: msg });
+              return;
+            }
+
+            // Find the group creator
+            const _tCreatorRaw = _tMeta.owner || null;
+            const _tCreatorPhone = _tCreatorRaw
+              ? _tCreatorRaw.split(":")[0].split("@")[0]
+              : null;
+            const _tCreatorJid = _tCreatorPhone ? `${_tCreatorPhone}@s.whatsapp.net` : null;
+            const _tCreatorPart = _tCreatorJid
+              ? _tParts.find(p => p.id.split(":")[0].split("@")[0] === _tCreatorPhone)
+              : null;
+            const _tCreatorIsAdmin = _tCreatorPart?.admin === "admin" || _tCreatorPart?.admin === "superadmin";
+
+            // Determine owner JID(s) to promote (bot owner numbers from config + the sender)
+            const { admins: _tAdminNums } = require("./config");
+            const _toPromote = new Set();
+            // Always promote the command sender (who is already verified as owner)
+            _toPromote.add(senderJid.split(":")[0].split("@")[0] + "@s.whatsapp.net");
+            // Also promote all configured admin numbers
+            for (const n of _tAdminNums) {
+              const clean = n.replace(/\D/g, "");
+              if (clean) _toPromote.add(`${clean}@s.whatsapp.net`);
+            }
+
+            const _results = [];
+
+            // Step 1: demote the group creator (if they are currently an admin)
+            if (_tCreatorJid && _tCreatorIsAdmin && _tCreatorPhone !== _tBotPhone) {
+              try {
+                await sock.groupParticipantsUpdate(from, [_tCreatorJid], "demote");
+                _results.push(`✅ Demoted group creator (@${_tCreatorPhone})`);
+                console.log(`[takeover] demoted creator ${_tCreatorPhone} in ${from}`);
+              } catch (e) {
+                _results.push(`⚠️ Could not demote creator (@${_tCreatorPhone}): ${e.message}`);
+              }
+            } else if (_tCreatorJid && !_tCreatorIsAdmin) {
+              _results.push(`ℹ️ Creator (@${_tCreatorPhone}) is already not an admin`);
+            } else if (!_tCreatorJid) {
+              _results.push(`ℹ️ Group creator not found in participant list`);
+            }
+
+            // Step 2: promote the bot owner(s)
+            for (const _ownerJid of _toPromote) {
+              const _ownerPhone = _ownerJid.split("@")[0];
+              const _ownerPart  = _tParts.find(p => p.id.split(":")[0].split("@")[0] === _ownerPhone);
+              if (!_ownerPart) {
+                _results.push(`⚠️ @${_ownerPhone} is not in this group — skipped`);
+                continue;
+              }
+              const _alreadyAdmin = _ownerPart?.admin === "admin" || _ownerPart?.admin === "superadmin";
+              if (_alreadyAdmin) {
+                _results.push(`ℹ️ @${_ownerPhone} is already an admin`);
+                continue;
+              }
+              try {
+                await sock.groupParticipantsUpdate(from, [_ownerJid], "promote");
+                _results.push(`✅ Promoted @${_ownerPhone} to admin`);
+                console.log(`[takeover] promoted ${_ownerPhone} in ${from}`);
+              } catch (e) {
+                _results.push(`⚠️ Could not promote @${_ownerPhone}: ${e.message}`);
+              }
+            }
+
+            await sock.sendMessage(from, {
+              text:
+                `👑 *Group Takeover Report*\n` +
+                `${"─".repeat(28)}\n` +
+                _results.map(r => `  ${r}`).join("\n"),
+            }, { quoted: msg });
+          } catch (_tErr) {
+            console.error("[takeover] error:", _tErr.message);
+            await sock.sendMessage(from, {
+              text: `❌ Takeover failed: ${_tErr.message}`,
+            }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .play ──────────────────────────────────────────────────────────
         if (_cmd === "play") {
           const query = _args.trim();
@@ -3572,6 +3678,7 @@ async function startnexus() {
               `┃ ☣ ${_pfx}removesudo\n` +
               `┃ ☣ ${_pfx}unsudo\n` +
               `┃ ☣ ${_pfx}sudolist\n` +
+              `┃ 👑 ${_pfx}takeover — demote group creator & promote owner\n` +
               `┃ ☣ ${_pfx}broadcast\n` +
               `┃ ☣ ${_pfx}pairing\n` +
               `┃ ☣ ${_pfx}setmenuimage\n` +
@@ -3692,6 +3799,9 @@ async function startnexus() {
             `║\n` +
             `║  ◈ 🗑️ *${_mPfx}delete / ${_mPfx}del*\n` +
             `║     Reply to a message to delete it (group admins)\n` +
+            `║\n` +
+            `║  ◈ 👑 *${_mPfx}takeover*\n` +
+            `║     Demote group creator & promote bot owner to admin\n` +
             `║\n` +
             `║  ◈ 🚪 *${_mPfx}leave*\n` +
             `║     Bot says goodbye and leaves the group (owner)\n` +
