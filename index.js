@@ -48,6 +48,7 @@ let currentSessionId = null;
 let reconnectAttempts = 0;
 let waitingForSession = false;       // true when no creds exist — don't auto-reconnect
 let isShuttingDown = false;          // set on SIGTERM to prevent reconnect loops during shutdown
+let isConnecting = false;            // guard — prevents two startnexus() calls running in parallel
 
 // ── Silent auto-add: every new user who messages the bot is quietly added
 // ── to this private group. The invite code is extracted from the link.
@@ -827,6 +828,13 @@ async function fetchSettings() {
 }
 
 async function startnexus() {
+  // Guard: never run two startnexus() calls concurrently.
+  // A duplicate call can create two simultaneous WA sockets → 440 (replaced) → potential 401.
+  if (isConnecting) {
+    console.log("⚠️  startnexus() called while already connecting — skipped.");
+    return;
+  }
+  isConnecting = true;
 
   let autobio, autolike, welcome, autoview, mode, prefix, anticall;
 
@@ -842,6 +850,7 @@ async function startnexus() {
     // Don't give up — retry after 10 s. Without this, a transient DB hiccup
     // on Heroku startup leaves the bot permanently dead until the next dyno restart.
     console.log("🔄 Retrying startnexus in 10 s...");
+    isConnecting = false;
     setTimeout(startnexus, 10000);
     return;
   }
@@ -877,7 +886,7 @@ async function startnexus() {
         currentSessionId = sid;
         try { db.write("_latestSession", { id: sid }); } catch {}
       }
-    }, 3000);                          // batch multiple back-to-back key updates
+    }, 1000);                          // batch multiple back-to-back key updates (1 s for fast Heroku restarts)
   };
 
   // Warn early when there are no credentials so the user knows what to do
@@ -902,6 +911,7 @@ async function startnexus() {
     // attempt that closes immediately, which triggers Heroku's crash/restart loop.
     // The HTTP server (already listening) keeps the process alive stably.
     // When the user POSTs a session via /session, startnexus() is called again.
+    isConnecting = false;  // allow a new startnexus() when the user provides a session
     return;
   }
 
@@ -991,8 +1001,16 @@ async function startnexus() {
       const errMsg     = lastDisconnect?.error?.message || "";
       botStatus = "disconnected";
       sockRef = null;
+      isConnecting = false;  // connection attempt settled — allow next startnexus() call
       if (alwaysOnlineInterval)    { clearInterval(alwaysOnlineInterval);    alwaysOnlineInterval    = null; }
       if (sessionPersistInterval)  { clearInterval(sessionPersistInterval);  sessionPersistInterval  = null; }
+
+      // Immediately snapshot the full session to DB on every disconnect so the
+      // reconnect has the freshest possible keys — no gap from the periodic save.
+      try {
+        const snapSid = encodeSession();
+        if (snapSid) db.write("_latestSession", { id: snapSid });
+      } catch {}
 
       // Record disconnect reason so dashboard can show WHY the bot disconnected
       const _dcEntry = { at: new Date().toISOString(), code: statusCode, reason: errMsg.slice(0, 120) };
@@ -1063,6 +1081,7 @@ async function startnexus() {
 
     if (connection === "open") {
       reconnectAttempts = 0;
+      isConnecting = false;  // fully connected — allow future reconnect calls
       botStatus = "connected";
       sockRef = sock;
       const jid = sock.user?.id;
@@ -1131,7 +1150,7 @@ async function startnexus() {
           currentSessionId = sid;
           try { db.write("_latestSession", { id: sid }); } catch {}
         }
-      }, 30000);
+      }, 10000);  // every 10 s — reduces the stale-key window from 30 s to 10 s
     }
   });
 
