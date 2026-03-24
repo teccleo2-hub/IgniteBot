@@ -206,10 +206,37 @@ function writeCreds(raw) {
 //   4. Plain base64-encoded creds.json
 //   5. Legacy multi-file base64 map { "creds.json": "<b64>", ... }
 //   6. Any other known bot prefix (WAMD:, TENNOR:, etc.) stripped then treated as base64
+// Returns true when the string looks like a recognisable session (text-based).
+// Binary blobs (e.g. an mp3 file contents) are rejected early so we skip all
+// the decode attempts and show a clear error instead of a confusing JSON parse failure.
+function isValidSessionString(s) {
+  if (!s || typeof s !== "string") return false;
+  const t = s.trim();
+  if (!t.length) return false;
+  // A valid session string is entirely ASCII printable text (base64, JSON, URLs).
+  // Reject if more than 2 % of the first 500 chars are outside the printable ASCII
+  // range (9=tab, 10=LF, 13=CR, 32-126 printable) — this catches binary blobs,
+  // UTF-8 multi-byte sequences, and BOM/replacement characters (\uFFFD etc.).
+  const sample = t.slice(0, 500);
+  let badBytes = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
+    const isPrintableAscii = c === 9 || c === 10 || c === 13 || (c >= 32 && c <= 126);
+    if (!isPrintableAscii) badBytes++;
+  }
+  if (badBytes / sample.length > 0.02) return false;
+  return true;
+}
+
 async function restoreSession(sessionId) {
   try {
     fs.mkdirSync(AUTH_FOLDER, { recursive: true });
     const id = (sessionId || "").trim();
+
+    // Reject obviously corrupted / binary session data before trying any decoder.
+    if (!isValidSessionString(id)) {
+      throw new Error("Session value contains binary or non-printable data — likely corrupted. Please provide a valid NEXUS-MD:~ session string.");
+    }
 
     // ── 1. NEXUS-MD prefixed ──────────────────────────────────────────────
     if (id.startsWith("NEXUS-MD")) {
@@ -982,10 +1009,40 @@ async function startnexus() {
 
       if (isLoggedOut) {
         reconnectAttempts = 0;
-        console.log("⚠️  Logged out by WhatsApp (401). Clearing session and waiting for re-pair...");
+        console.log("⚠️  Logged out by WhatsApp (401) — WhatsApp has revoked this session.");
+        console.log("   This happens when the linked device is removed from WhatsApp or the session expires.");
+        console.log("   You need a NEW session. Visit the dashboard → Setup tab to pair again.");
+
+        // Save the revoked session as a labelled backup so the dashboard can surface it,
+        // but mark it clearly as revoked so we never try to reconnect with it.
+        try {
+          const revokedSid = encodeSession();
+          if (revokedSid) db.write("_revokedSession", { id: revokedSid, at: new Date().toISOString() });
+        } catch {}
+
+        // Clear local auth files — these keys are permanently invalid after a 401.
         if (fs.existsSync(AUTH_FOLDER)) fs.rmSync(AUTH_FOLDER, { recursive: true, force: true });
         try { db.write("_latestSession", { id: null }); } catch {}
-        setTimeout(startnexus, 2000);
+
+        // Check if the SESSION_ID env var looks valid and is different from what just got revoked.
+        // If so, try it — it may be a freshly generated replacement the user already set.
+        const _envSess = process.env.SESSION_ID || process.env.SESSION || null;
+        if (_envSess && isValidSessionString(_envSess)) {
+          console.log("🔄 Found valid SESSION_ID env var — attempting auto-restore after 10 s...");
+          setTimeout(async () => {
+            const ok = await restoreSession(_envSess).catch(() => false);
+            if (ok) {
+              console.log("✅ Auto-restored from SESSION_ID env var after 401.");
+              setTimeout(startnexus, 1000);
+            } else {
+              console.log("❌ SESSION_ID env var restore failed — waiting for manual session input.");
+              waitingForSession = true;
+            }
+          }, 10000);
+        } else {
+          if (_envSess) console.log("⚠️  SESSION_ID env var is corrupted/binary — cannot auto-restore. Please set a valid SESSION_ID.");
+          setTimeout(startnexus, 5000);
+        }
       } else if (isReplaced) {
         // Another WhatsApp instance connected with the same session (e.g. a
         // new Heroku dyno starting while the old one is still running).
@@ -5965,7 +6022,14 @@ db.init()
     // a stale SESSION_ID env var that WhatsApp has already rotated away from.
     const dbSession = db.read("_latestSession", null);
     // Check all recognised session env vars (Perez uses SESSION, IgniteBot uses SESSION_ID)
-    const envSession = process.env.SESSION_ID || process.env.SESSION || null;
+    const rawEnvSession = process.env.SESSION_ID || process.env.SESSION || null;
+    // Validate the env var before using it — corrupted/binary values (e.g. an
+    // accidentally uploaded file) will cause a confusing parse error otherwise.
+    const envSession = rawEnvSession && isValidSessionString(rawEnvSession) ? rawEnvSession : null;
+    if (rawEnvSession && !envSession) {
+      console.warn("⚠️  SESSION_ID / SESSION env var contains binary or corrupted data and will be ignored.");
+      console.warn("   Please set a valid NEXUS-MD:~ session string in your Heroku config vars.");
+    }
     const sessionToRestore = dbSession?.id || envSession || null;
     if (sessionToRestore) {
       const fromEnvOnly = !dbSession?.id && !!envSession;
@@ -5997,8 +6061,9 @@ db.init()
           settings.initSettings();
           try { await initializeDatabase(); } catch (e) { console.log("⚠️  Perez DB init:", e.message); }
           const dbSession = db.read("_latestSession", null);
-          const envSession = process.env.SESSION_ID || process.env.SESSION || null;
-          const sessionToRestore = dbSession?.id || envSession || null;
+          const rawEnvSession2 = process.env.SESSION_ID || process.env.SESSION || null;
+          const envSession2 = rawEnvSession2 && isValidSessionString(rawEnvSession2) ? rawEnvSession2 : null;
+          const sessionToRestore = dbSession?.id || envSession2 || null;
           if (sessionToRestore) await restoreSession(sessionToRestore).catch(() => {});
           return startnexus();
         })
