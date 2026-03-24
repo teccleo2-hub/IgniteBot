@@ -646,9 +646,16 @@ function emergencyFlush(label, err) {
   } catch {}
 }
 process.on("uncaughtException", (err) => {
+  const msg = err?.message || String(err);
+  // Baileys / WebSocket internal errors — these are safe to swallow and must NOT
+  // crash the dyno. Exiting on these causes the Heroku restart loop the user sees.
+  const isBaileysNoise = /session_cipher|queue_job|Closing session|SessionEntry|chainKey|indexInfo|registrationId|ephemeralKey|Bad MAC|decrypt|libsignal|Session error|ECONNREFUSED|ECONNRESET|ETIMEDOUT|socket hang up|read ECONNRESET|write ECONNRESET|WebSocket|ws error|stream error|boomed|rate-limit|Connection Closed|connection closed|Timed Out|connect ETIMEDOUT/i.test(msg);
+  if (isBaileysNoise) {
+    console.warn(`⚠️ Suppressed internal noise (uncaughtException): ${msg.slice(0, 120)}`);
+    return;
+  }
   emergencyFlush("Uncaught exception", err);
-  // Exit so Heroku/supervisor can restart cleanly. Without exit() the process
-  // stays alive in an undefined state and Heroku kills it with R15/R14 errors.
+  // Only exit for genuinely unrecoverable errors — not Baileys transport noise.
   setTimeout(() => process.exit(1), 500);
 });
 // ── Session-health tracking — must be declared before any handler that uses them
@@ -786,6 +793,10 @@ async function startnexus() {
     console.log("✅ Settings loaded successfully.... indexfile");
   } catch (error) {
     console.error("❌ Failed to load settings:...indexfile", error.message || error);
+    // Don't give up — retry after 10 s. Without this, a transient DB hiccup
+    // on Heroku startup leaves the bot permanently dead until the next dyno restart.
+    console.log("🔄 Retrying startnexus in 10 s...");
+    setTimeout(startnexus, 10000);
     return;
   }
 
@@ -4736,6 +4747,22 @@ db.init()
     return startnexus();
   })
   .catch((err) => {
-    console.error("Fatal bot error:", err);
-    process.exit(1);
+    console.error("Fatal bot startup error:", err);
+    // Don't exit — retry the full startup after 15 s so Heroku doesn't see a crash.
+    console.log("🔄 Retrying full startup in 15 s...");
+    setTimeout(() => {
+      db.init()
+        .then(async () => {
+          settings.initSettings();
+          try { await initializeDatabase(); } catch (e) { console.log("⚠️  Perez DB init:", e.message); }
+          const dbSession = db.read("_latestSession", null);
+          const envSession = process.env.SESSION_ID || process.env.SESSION || null;
+          const sessionToRestore = dbSession?.id || envSession || null;
+          if (sessionToRestore) await restoreSession(sessionToRestore).catch(() => {});
+          return startnexus();
+        })
+        .catch((err2) => {
+          console.error("Fatal bot error (retry):", err2.message);
+        });
+    }, 15000);
   });
