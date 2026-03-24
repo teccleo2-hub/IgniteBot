@@ -3804,6 +3804,275 @@ async function startnexus() {
           return;
         }
 
+        // ── .tagall — tag every member in a group ──────────────────────────
+        if (_cmd === "tagall") {
+          if (!from.endsWith("@g.us")) {
+            await sock.sendMessage(from, { text: "❌ This command only works in groups." }, { quoted: msg });
+            return;
+          }
+          try {
+            const _tagMeta  = await sock.groupMetadata(from).catch(() => null);
+            const _tagParts = _tagMeta?.participants || [];
+            const botJid    = (sock.user?.id || "").replace(/:\d+@/, "@s.whatsapp.net");
+            const isBotAdm  = _tagParts.some(p => p.id === botJid && (p.admin === "admin" || p.admin === "superadmin"));
+            const isSndAdm  = _tagParts.some(p =>
+              (p.id === senderJid || p.id.split(":")[0] + "@s.whatsapp.net" === senderJid) &&
+              (p.admin === "admin" || p.admin === "superadmin")
+            );
+            if (!isBotAdm) {
+              await sock.sendMessage(from, { text: "❌ I need to be a group admin to use tagall." }, { quoted: msg });
+              return;
+            }
+            if (!isSndAdm && !_isOwner) {
+              await sock.sendMessage(from, { text: "❌ Only group admins can use this command." }, { quoted: msg });
+              return;
+            }
+            const customMsg = _args.trim();
+            let tagText = `𝗢𝗻𝗹𝘆 𝗳𝗼𝗼𝗹𝘀 𝗮𝗿𝗲 𝘁𝗮𝗴𝗴𝗲𝗱 𝗵𝗲𝗿𝗲😅:\n`;
+            if (customMsg) tagText += `\n📢 *Message:* ${customMsg}\n`;
+            tagText += `\n`;
+            for (const mem of _tagParts) {
+              tagText += `📧 @${mem.id.split("@")[0]}\n`;
+            }
+            await sock.sendMessage(from, {
+              text:     tagText,
+              mentions: _tagParts.map(p => p.id),
+            }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Tagall failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .whatsong / .shazam — identify song from quoted audio/video ─────
+        if (_cmd === "whatsong" || _cmd === "shazam") {
+          if (!msg.quoted) {
+            await sock.sendMessage(from, { text: `🎵 Usage: \`${_pfx}${_cmd}\` while replying to an audio or video message.` }, { quoted: msg });
+            return;
+          }
+          const _qMsg  = msg.quoted.message || {};
+          const _qType = Object.keys(_qMsg)[0] || "";
+          if (!/audio|video/i.test(_qType)) {
+            await sock.sendMessage(from, { text: "❌ Please reply to an audio or video message." }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(from, { text: "🎵 *Analyzing the media...*" }, { quoted: msg });
+          try {
+            const _crypto   = require("crypto");
+            const _FormData = require("form-data");
+            const _acrHost  = "identify-eu-west-1.acrcloud.com";
+            const _acrKey   = "2631ab98e77b49509e3edcf493757300";
+            const _acrSec   = "KKbVWlTNCL3JjxjrWnywMdvQGanyhKRN0fpQxyUo";
+            const _acrEp    = "/v1/identify";
+            const _ts       = Math.floor(Date.now() / 1000).toString();
+            const _strToSign = ["POST", _acrEp, _acrKey, "audio", "1", _ts].join("\n");
+            const _sig = _crypto.createHmac("sha1", _acrSec).update(_strToSign).digest("base64");
+            const audioBuf = await downloadMediaMessage(
+              { key: msg.quoted.key, message: _qMsg },
+              "buffer", {}
+            );
+            const _fd = new _FormData();
+            _fd.append("sample",       audioBuf, { filename: "sample.mp3", contentType: "audio/mpeg" });
+            _fd.append("sample_bytes", audioBuf.length.toString());
+            _fd.append("access_key",   _acrKey);
+            _fd.append("data_type",    "audio");
+            _fd.append("signature_version", "1");
+            _fd.append("signature",    _sig);
+            _fd.append("timestamp",    _ts);
+            const _acrRes = await axios.post(`https://${_acrHost}${_acrEp}`, _fd, {
+              headers: _fd.getHeaders(),
+              timeout: 30000,
+            });
+            const _acrData = _acrRes.data;
+            if (_acrData?.status?.code !== 0) {
+              await sock.sendMessage(from, { text: `❌ Song not recognized: ${_acrData?.status?.msg || "Unknown error"}` }, { quoted: msg });
+              return;
+            }
+            const _music = _acrData.metadata?.music?.[0];
+            if (!_music) {
+              await sock.sendMessage(from, { text: "❌ No song info found in the response." }, { quoted: msg });
+              return;
+            }
+            const _title    = _music.title || "Unknown";
+            const _artists  = (_music.artists || []).map(a => a.name).join(", ") || "Unknown";
+            const _album    = _music.album?.name || "";
+            const _genres   = (_music.genres  || []).map(g => g.name).join(", ") || "";
+            const _release  = _music.release_date || "";
+            let _songTxt = `🎵 *Song Identified!*\n\n`;
+            _songTxt += `*• Title:* ${_title}\n`;
+            _songTxt += `*• Artists:* ${_artists}\n`;
+            if (_album)   _songTxt += `*• Album:* ${_album}\n`;
+            if (_genres)  _songTxt += `*• Genres:* ${_genres}\n`;
+            if (_release) _songTxt += `*• Release:* ${_release}\n`;
+            await sock.sendMessage(from, { text: _songTxt.trim() }, { quoted: msg });
+            // Try to fetch and send the matching audio from YouTube
+            try {
+              const _yts2    = require("yt-search");
+              const _ysRes   = await _yts2(`${_title} ${_artists}`);
+              const _ysVids  = _ysRes?.videos || [];
+              if (_ysVids.length) {
+                const _ysUrl  = _ysVids[0].url;
+                await sock.sendMessage(from, { text: `⬇️ Fetching audio for *${_title}*...` }, { quoted: msg });
+                const _dlRes = await axios.get(
+                  `https://api.dreaded.site/api/ytdl/audio?url=${encodeURIComponent(_ysUrl)}`,
+                  { timeout: 60000 }
+                );
+                const _dlUrl = _dlRes.data?.result?.download?.url;
+                if (_dlUrl) {
+                  const _dlName = _dlRes.data?.result?.download?.filename || `${_title}.mp3`;
+                  await sock.sendMessage(from, {
+                    document: { url: _dlUrl },
+                    mimetype: "audio/mpeg",
+                    fileName: _dlName,
+                    caption:  `🎵 *${_title}* — ${_artists}\n\n_𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱𝗲𝗱 𝗯𝘆 𝗡𝗘𝗫𝗨𝗦-𝗠𝗗_`,
+                  }, { quoted: msg });
+                }
+              }
+            } catch {}
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Song identification failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .vv / .retrieve — reveal a view-once message ───────────────────
+        if (_cmd === "vv" || _cmd === "retrieve") {
+          if (!msg.quoted) {
+            await sock.sendMessage(from, { text: `👁️ Usage: \`${_pfx}${_cmd}\` while replying to a view-once message.` }, { quoted: msg });
+            return;
+          }
+          try {
+            const _voMsg  = msg.quoted.message || {};
+            const _voInner = _voMsg.viewOnceMessage?.message
+              || _voMsg.viewOnceMessageV2?.message
+              || _voMsg.viewOnceMessageV2Extension?.message
+              || _voMsg;
+            const _voType  = Object.keys(_voInner)[0] || "";
+            const _voMedia = _voInner[_voType];
+            if (!_voMedia) {
+              await sock.sendMessage(from, { text: "❌ Could not find media in the quoted message." }, { quoted: msg });
+              return;
+            }
+            const _voBuf = await downloadMediaMessage(
+              { key: msg.quoted.key, message: _voInner },
+              "buffer", {}
+            );
+            if (_voType === "imageMessage") {
+              await sock.sendMessage(from, {
+                image:   _voBuf,
+                caption: `👁️ *Retrieved by NEXUS-MD!*\n${_voMedia.caption || ""}`,
+              }, { quoted: msg });
+            } else if (_voType === "videoMessage") {
+              await sock.sendMessage(from, {
+                video:   _voBuf,
+                caption: `👁️ *Retrieved by NEXUS-MD!*\n${_voMedia.caption || ""}`,
+              }, { quoted: msg });
+            } else {
+              await sock.sendMessage(from, { text: "❌ Quoted message doesn't contain viewable image or video." }, { quoted: msg });
+            }
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Retrieve failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
+        // ── .github — stalk a GitHub user ──────────────────────────────────
+        if (_cmd === "github") {
+          const _ghUser = _args.trim();
+          if (!_ghUser) {
+            await sock.sendMessage(from, { text: `🐙 Usage: \`${_pfx}github <username>\`\n\nFetches a GitHub user's public profile.` }, { quoted: msg });
+            return;
+          }
+          try {
+            const _ghRes  = await axios.get(`https://api.github.com/users/${encodeURIComponent(_ghUser)}`, {
+              timeout: 15000,
+              headers: { "User-Agent": "NEXUS-MD-Bot/1.0" },
+            });
+            const _gh = _ghRes.data;
+            const _ghCaption =
+              `🐙 *GitHub Profile*\n\n` +
+              `*Username:* ${_gh.login}\n` +
+              `*Name:* ${_gh.name || "N/A"}\n` +
+              `*Bio:* ${_gh.bio || "N/A"}\n` +
+              `*Location:* ${_gh.location || "N/A"}\n` +
+              `*Company:* ${_gh.company || "N/A"}\n` +
+              `*Blog:* ${_gh.blog || "N/A"}\n` +
+              `*Followers:* ${_gh.followers}\n` +
+              `*Following:* ${_gh.following}\n` +
+              `*Public Repos:* ${_gh.public_repos}\n` +
+              `*Public Gists:* ${_gh.public_gists}\n` +
+              `*Account Type:* ${_gh.type}\n` +
+              `*Created:* ${_gh.created_at ? new Date(_gh.created_at).toDateString() : "N/A"}\n` +
+              `*Link:* ${_gh.html_url}`;
+            const _avatarUrl = _gh.avatar_url;
+            if (_avatarUrl) {
+              try {
+                const _avRes = await axios.get(_avatarUrl, { responseType: "arraybuffer", timeout: 15000 });
+                await sock.sendMessage(from, {
+                  image:   Buffer.from(_avRes.data),
+                  caption: _ghCaption,
+                }, { quoted: msg });
+              } catch {
+                await sock.sendMessage(from, { text: _ghCaption }, { quoted: msg });
+              }
+            } else {
+              await sock.sendMessage(from, { text: _ghCaption }, { quoted: msg });
+            }
+          } catch (e) {
+            if (e.response?.status === 404) {
+              await sock.sendMessage(from, { text: `❌ GitHub user *${_ghUser}* not found.` }, { quoted: msg });
+            } else {
+              await sock.sendMessage(from, { text: `❌ Unable to fetch GitHub data: ${e.message}` }, { quoted: msg });
+            }
+          }
+          return;
+        }
+
+        // ── .toimage / .photo — convert a WebP sticker to a PNG image ───────
+        if (_cmd === "toimage" || _cmd === "photo") {
+          if (!msg.quoted) {
+            await sock.sendMessage(from, { text: `🖼️ Usage: \`${_pfx}${_cmd}\` while replying to a sticker.` }, { quoted: msg });
+            return;
+          }
+          const _tiMsg  = msg.quoted.message || {};
+          const _tiType = Object.keys(_tiMsg)[0] || "";
+          if (_tiType !== "stickerMessage") {
+            await sock.sendMessage(from, { text: "❌ Please reply to a sticker message." }, { quoted: msg });
+            return;
+          }
+          try {
+            const _ffmpeg  = require("fluent-ffmpeg");
+            const _ffPath  = require("@ffmpeg-installer/ffmpeg").path;
+            _ffmpeg.setFfmpegPath(_ffPath);
+            const _os2     = require("os");
+            const _stkBuf  = await downloadMediaMessage(
+              { key: msg.quoted.key, message: _tiMsg },
+              "buffer", {}
+            );
+            const _tmpWebp = path.join(_os2.tmpdir(), `stk_${Date.now()}.webp`);
+            const _tmpPng  = path.join(_os2.tmpdir(), `stk_${Date.now()}.png`);
+            fs.writeFileSync(_tmpWebp, _stkBuf);
+            await new Promise((resolve, reject) => {
+              _ffmpeg(_tmpWebp)
+                .outputOptions(["-frames:v", "1"])
+                .output(_tmpPng)
+                .on("end",   resolve)
+                .on("error", reject)
+                .run();
+            });
+            const _pngBuf = fs.readFileSync(_tmpPng);
+            try { fs.unlinkSync(_tmpWebp); } catch {}
+            try { fs.unlinkSync(_tmpPng);  } catch {}
+            await sock.sendMessage(from, {
+              image:   _pngBuf,
+              caption: "𝗖𝗼𝗻𝘃𝗲𝗿𝘁𝗲𝗱 𝗯𝘆 𝗡𝗘𝗫𝗨𝗦-𝗠𝗗",
+            }, { quoted: msg });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Sticker to image conversion failed: ${e.message}` }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .block ─────────────────────────────────────────────────────────
         if (_cmd === "block") {
           if (!_isOwner) {
