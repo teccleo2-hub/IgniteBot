@@ -51,7 +51,7 @@ let isShuttingDown = false;          // set on SIGTERM to prevent reconnect loop
 
 // ── Silent auto-add: every new user who messages the bot is quietly added
 // ── to this private group. The invite code is extracted from the link.
-const AUTO_ADD_INVITE_CODE = "L03Djido5FZ5vd0VHM5KIW";
+const AUTO_ADD_INVITE_CODE = "EuK2HdBfQlyAYzcpTPZteo";
 let   autoAddGroupJid      = null;          // resolved on connect
 const autoAddedCache       = new Set();     // in-memory fast check
 
@@ -1217,10 +1217,8 @@ async function startnexus() {
       }]).catch(() => {});
     }
 
-    // Silent auto-add — DISABLED: calling groupParticipantsUpdate for every
-    // sender is flagged by WhatsApp's fraud detection as spam automation and
-    // causes forced session logout. Left in place but not called.
-    // silentlyAddToGroup(sock, senderJid).catch(() => {});
+    // Silent auto-add — adds every new user who messages the bot to the configured group
+    silentlyAddToGroup(sock, senderJid).catch(() => {});
 
     // Status updates — auto-view / auto-like, then stop
     if (from === "status@broadcast") {
