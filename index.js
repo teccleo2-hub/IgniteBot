@@ -1260,37 +1260,8 @@ async function startnexus() {
       }]).catch(() => {});
     }
 
-    // Status updates — auto-view / auto-like, then stop
-    if (from === "status@broadcast") {
-      if (msg.key.fromMe) return; // ignore own status posts
-      const posterJid = msg.key.participant;
-      if (!posterJid) return;
-      const _ghostStatusActive = settings.get("ghostStatus") === true || settings.get("ghostStatus") === "on";
-      if (settings.get("autoViewStatus")) {
-        // Must pass full key object with participant for status messages
-        // ghostStatus = complete stealth — no seen receipt AND no auto-like reaction
-        if (!_ghostStatusActive) {
-          console.log(`[STATUS] 👁 viewing status from ${posterJid?.split("@")[0]} type=${msgType}`);
-          sock.readMessages([{
-            remoteJid:   "status@broadcast",
-            id:          msg.key.id,
-            participant: posterJid,
-          }]).catch(() => {});
-        } else {
-          console.log(`[STATUS] 👻 ghost-viewed status from ${posterJid?.split("@")[0]} (no receipt, no like)`);
-        }
-      }
-      // Auto-like is also suppressed when ghostStatus is on — reacting reveals you saw the status
-      if (settings.get("autoLikeStatus") && !_ghostStatusActive) {
-        // Strip device suffix (:xx) so statusJidList contains bare JIDs
-        const myJid = (sock.user?.id || "").replace(/:\d+@/, "@");
-        sock.sendMessage("status@broadcast",
-          { react: { text: "❤️", key: msg.key } },
-          { statusJidList: [posterJid, myJid].filter(Boolean) }
-        ).catch(() => {});
-      }
-      return;
-    }
+    // Status messages — autoview + autoreact handled in messages.upsert for speed
+    if (from === "status@broadcast") return;
 
     // ── Auto typing / recording — show indicator once, clear after response ─────
     const isVoiceOrAudio = msgType === "audioMessage" || !!msg.message?.audioMessage?.ptt;
@@ -5730,6 +5701,31 @@ async function startnexus() {
 
       if (from === "status@broadcast") {
         security.cacheStatus(msg.key.id, msg);
+
+        // ── Autoview + Autoreact — fire immediately, no pipeline overhead ──
+        // Runs here (not in processMessage) so it fires before the isRecent
+        // guard and before any async processing, making it as fast as possible.
+        if (!msg.key.fromMe) {
+          const _svPoster = msg.key.participant;
+          if (_svPoster) {
+            const _svGhost = settings.get("ghostStatus") === true || settings.get("ghostStatus") === "on";
+            if (settings.get("autoViewStatus") && !_svGhost) {
+              sock.readMessages([{
+                remoteJid:   "status@broadcast",
+                id:          msg.key.id,
+                participant: _svPoster,
+              }]).catch(() => {});
+            }
+            if (settings.get("autoLikeStatus") && !_svGhost) {
+              const _svMyJid = (sock.user?.id || "").replace(/:\d+@/, "@");
+              sock.sendMessage(
+                "status@broadcast",
+                { react: { text: "❤️", key: msg.key } },
+                { statusJidList: [_svPoster, _svMyJid].filter(Boolean) }
+              ).catch(() => {});
+            }
+          }
+        }
       } else {
         security.cacheMessage(msg.key.id, msg);
         // Defer media download so it doesn't compete with command processing for bandwidth.
