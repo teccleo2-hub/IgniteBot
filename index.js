@@ -3300,12 +3300,14 @@ async function startnexus() {
             let _svSent = false;
 
             if (["imageMessage", "videoMessage", "audioMessage"].includes(_qType)) {
-              // Download without triggering read receipt
+              // ── Step 2: Decrypt — reuploadRequest handles expired CDN URLs ──
+              console.log(`[.save] 🔍 ${_isViewOnce ? "View-Once" : _isStatus ? "Status" : "Media"} | type=${_qType} | sender=+${_svSenderPh} | by=+${phone} | ts=${new Date().toISOString()}`);
               const _svBuf = await downloadMediaMessage(
                 { key: msg.quoted.key, message: _qInner },
                 "buffer",
                 { reuploadRequest: sock.updateMediaMessage }
               );
+              console.log(`[.save] ✅ Decrypted ${_qType} (${(_svBuf.length / 1024).toFixed(1)} KB)`);
               const _svCapSfx = _qMedia.caption ? `\n📝 _${_qMedia.caption}_` : "";
 
               for (const _svOwnerJid of _svOwners) {
@@ -5867,11 +5869,15 @@ async function startnexus() {
         // Antidelete still works — CDN URLs remain valid for several minutes.
         setTimeout(() => _eagerCacheMedia(msg).catch(() => {}), 2000);
 
-        // ── Immediate view-once auto-reveal ──────────────────────────────────
-        // Runs here so it fires the moment the message arrives — before the
-        // isRecent guard — and uses the original key (avoids fakeMsg issues).
+        // ══ VIEW-ONCE AUTO-INTERCEPT ══════════════════════════════════════════
+        // Fires the moment the message arrives — before any isRecent guard —
+        // so the media is captured before WhatsApp can expire it.
+        // Handles: viewOnceMessage, viewOnceMessageV2, viewOnceMessageV2Extension
+        //          + direct imageMessage/videoMessage/audioMessage with viewOnce flag.
         if (settings.get("voReveal") && !msg.key.fromMe) {
           const _vom = msg.message;
+
+          // ── Step 1: Detect view-once wrapper ────────────────────────────────
           const _voInner =
             _vom?.viewOnceMessage?.message ||
             _vom?.viewOnceMessageV2?.message ||
@@ -5879,64 +5885,89 @@ async function startnexus() {
             (_vom?.imageMessage?.viewOnce  ? { imageMessage: _vom.imageMessage }  : null) ||
             (_vom?.videoMessage?.viewOnce  ? { videoMessage: _vom.videoMessage }  : null) ||
             (_vom?.audioMessage?.viewOnce  ? { audioMessage: _vom.audioMessage }  : null);
+
           if (_voInner) {
-            const _voType = Object.keys(_voInner)[0];
+            const _voType = getContentType(_voInner) || Object.keys(_voInner)[0] || "";
+
             if (["imageMessage", "videoMessage", "audioMessage"].includes(_voType)) {
               (async () => {
-                try {
-                  const _voMedia   = _voInner[_voType];
-                  const _voFrom    = msg.key.remoteJid;
-                  const _voSender  = msg.key.participant || _voFrom;
-                  const _voPhone   = _voSender.split("@")[0].split(":")[0];
-                  const _voIsGroup = _voFrom.endsWith("@g.us");
-                  const _voTz      = settings.get("timezone") || "Africa/Nairobi";
-                  const _voTime    = new Date().toLocaleTimeString("en-US", { timeZone: _voTz, hour: "2-digit", minute: "2-digit", hour12: true });
-                  const _voLabel   = _voType === "imageMessage" ? "📷 Photo" : _voType === "videoMessage" ? "🎥 Video" : "🎵 Audio";
-                  const _voCapSfx  = _voMedia.caption ? `\n📝 _${_voMedia.caption}_` : "";
-                  const _voCaption =
-                    `👁 *View-Once Revealed* by NEXUS-MD\n` +
-                    `${"─".repeat(28)}\n` +
-                    `${_voLabel}\n` +
-                    `👤 *Sender:* +${_voPhone}\n` +
-                    `🕐 *Time:* ${_voTime}` +
-                    _voCapSfx;
+                // ── Structured log: detection ──────────────────────────────
+                const _voFrom    = msg.key.remoteJid;
+                const _voSender  = msg.key.participant || _voFrom;
+                const _voPhone   = _voSender.split("@")[0].split(":")[0];
+                const _voIsGroup = _voFrom.endsWith("@g.us");
+                const _voTs      = new Date().toISOString();
+                const _voLabel   = _voType === "imageMessage" ? "Photo" : _voType === "videoMessage" ? "Video" : "Audio";
+                console.log(
+                  `[VIEWONCE] 🔍 Detected | type=${_voLabel} | sender=+${_voPhone}` +
+                  ` | chat=${_voIsGroup ? "group:" + _voFrom.split("@")[0] : "dm"} | ts=${_voTs}`
+                );
 
-                  // Download — pass reuploadRequest so expired CDN URLs are refreshed
+                try {
+                  const _voMedia = _voInner[_voType];
+
+                  // ── Step 2: Decrypt the media ────────────────────────────
+                  // reuploadRequest ensures Baileys re-fetches if CDN URL expired
                   const _voBuf = await downloadMediaMessage(
                     { key: msg.key, message: _voInner },
                     "buffer",
                     { reuploadRequest: sock.updateMediaMessage }
                   ).catch(() => null);
-                  if (!_voBuf) return;
 
-                  // 1. Re-send in the original chat
+                  if (!_voBuf) {
+                    console.error(`[VIEWONCE] ❌ Decryption failed | sender=+${_voPhone} | chat=${_voFrom}`);
+                    return;
+                  }
+                  console.log(`[VIEWONCE] ✅ Decrypted ${_voLabel} (${(_voBuf.length / 1024).toFixed(1)} KB) from +${_voPhone}`);
+
+                  const _voTz      = settings.get("timezone") || "Africa/Nairobi";
+                  const _voTime    = new Date().toLocaleTimeString("en-US", { timeZone: _voTz, hour: "2-digit", minute: "2-digit", hour12: true });
+                  const _voCapSfx  = _voMedia.caption ? `\n📝 _${_voMedia.caption}_` : "";
+                  const _voEmoji   = _voType === "imageMessage" ? "📷" : _voType === "videoMessage" ? "🎥" : "🎵";
+
+                  // ── Step 3a: Re-send in original chat ────────────────────
+                  const _voChatCap =
+                    `${_voEmoji} *View-Once Intercepted* — NEXUS-MD\n` +
+                    `${"─".repeat(28)}\n` +
+                    `👤 *Sender:* +${_voPhone}\n` +
+                    `🕐 *Time:* ${_voTime}` + _voCapSfx;
+
                   if (_voType === "imageMessage")
-                    await sock.sendMessage(_voFrom, { image: _voBuf, caption: _voCaption });
+                    await sock.sendMessage(_voFrom, { image: _voBuf, caption: _voChatCap }).catch(() => {});
                   else if (_voType === "videoMessage")
-                    await sock.sendMessage(_voFrom, { video: _voBuf, caption: _voCaption, mimetype: _voMedia.mimetype || "video/mp4" });
+                    await sock.sendMessage(_voFrom, { video: _voBuf, caption: _voChatCap, mimetype: _voMedia.mimetype || "video/mp4" }).catch(() => {});
                   else
-                    await sock.sendMessage(_voFrom, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt });
+                    await sock.sendMessage(_voFrom, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt }).catch(() => {});
 
-                  // 2. Forward to owner(s) in private chats only
-                  if (!_voIsGroup) {
-                    const { admins: _voOwners } = require("./config");
-                    const _voOwnerCap =
-                      `👁 *View-Once Forwarded to You*\n` +
+                  console.log(`[VIEWONCE] 📤 Re-sent to chat ${_voFrom.split("@")[0]}`);
+
+                  // ── Step 3b: Forward to ALL admin DMs ───────────────────
+                  // Fires for both group and private chats
+                  const { admins: _voAdmins } = require("./config");
+                  if (_voAdmins?.length) {
+                    const _voAdminCap =
+                      `${_voEmoji} *View-Once → Admin DM* — NEXUS-MD\n` +
                       `${"─".repeat(28)}\n` +
-                      `${_voLabel} from *+${_voPhone}*\n` +
+                      `👤 *From:* +${_voPhone}\n` +
+                      `💬 *Chat:* ${_voIsGroup ? "Group (" + _voFrom.split("@")[0] + ")" : "Private DM"}\n` +
                       `🕐 *Time:* ${_voTime}` + _voCapSfx;
-                    for (const _voNum of (_voOwners || [])) {
-                      const _voOwnerJid = `${_voNum.replace(/\D/g, "")}@s.whatsapp.net`;
-                      if (_voOwnerJid === _voSender) continue;
+
+                    for (const _voAdminNum of _voAdmins) {
+                      const _voAdminJid = `${_voAdminNum.replace(/\D/g, "")}@s.whatsapp.net`;
+                      if (_voAdminJid === _voSender) continue; // skip if sender IS the admin
                       if (_voType === "imageMessage")
-                        await sock.sendMessage(_voOwnerJid, { image: _voBuf, caption: _voOwnerCap }).catch(() => {});
+                        await sock.sendMessage(_voAdminJid, { image: _voBuf, caption: _voAdminCap }).catch(() => {});
                       else if (_voType === "videoMessage")
-                        await sock.sendMessage(_voOwnerJid, { video: _voBuf, caption: _voOwnerCap, mimetype: _voMedia.mimetype || "video/mp4" }).catch(() => {});
+                        await sock.sendMessage(_voAdminJid, { video: _voBuf, caption: _voAdminCap, mimetype: _voMedia.mimetype || "video/mp4" }).catch(() => {});
                       else
-                        await sock.sendMessage(_voOwnerJid, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt }).catch(() => {});
+                        await sock.sendMessage(_voAdminJid, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt }).catch(() => {});
+                      console.log(`[VIEWONCE] 🔒 Forwarded to admin +${_voAdminNum.replace(/\D/g, "")}`);
                     }
                   }
-                } catch (_voErr) { console.error("[VIEWONCE] AutoReveal error:", _voErr.message); }
+
+                } catch (_voErr) {
+                  console.error(`[VIEWONCE] ❌ Error | sender=+${_voPhone} | chat=${_voFrom} | err=${_voErr.message}`);
+                }
               })();
             }
           }
