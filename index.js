@@ -5589,81 +5589,7 @@ async function startnexus() {
       setTimeout(() => _sendPresence("paused", from), 1500);
     }
 
-    // ── Optional background features — run after response, never block commands
-    // Auto-reveal view-once (voReveal)
-    if (settings.get("voReveal") && !msg.key.fromMe) {
-      (async () => {
-        try {
-          const _m = _inner;
-          // Unwrap all known view-once wrapper types
-          const voInner =
-            _m?.viewOnceMessage?.message ||
-            _m?.viewOnceMessageV2?.message ||
-            _m?.viewOnceMessageV2Extension?.message ||
-            (_m?.imageMessage?.viewOnce ? { imageMessage: _m.imageMessage } : null) ||
-            (_m?.videoMessage?.viewOnce ? { videoMessage: _m.videoMessage } : null) ||
-            (_m?.audioMessage?.viewOnce  ? { audioMessage: _m.audioMessage } : null);
-
-          if (!voInner) return;
-          const mt = Object.keys(voInner)[0];
-          if (!["imageMessage", "videoMessage", "audioMessage"].includes(mt)) return;
-
-          // Download the encrypted media
-          const fakeMsg = {
-            key: { remoteJid: from, id: msg.key.id, fromMe: false, participant: senderJid || undefined },
-            message: voInner,
-          };
-          const buf   = Buffer.from(await downloadMediaMessage(fakeMsg, "buffer", {}));
-          const media = voInner[mt];
-
-          // Build rich caption
-          const tz        = settings.get("timezone") || "Africa/Nairobi";
-          const timeStr   = new Date().toLocaleTimeString("en-US", { timeZone: tz, hour: "2-digit", minute: "2-digit", hour12: true });
-          const senderNum = `+${phone}`;
-          const typeLabel = mt === "imageMessage" ? "📷 Photo" : mt === "videoMessage" ? "🎥 Video" : "🎵 Audio";
-          const origCaption = media.caption ? `\n📝 _${media.caption}_` : "";
-          const isGroup = from.endsWith("@g.us");
-          const caption =
-            `👁 *View-Once Revealed* by NEXUS-MD\n` +
-            `${"─".repeat(28)}\n` +
-            `${typeLabel}\n` +
-            `👤 *Sender:* ${senderNum}\n` +
-            `🕐 *Time:* ${timeStr}` +
-            origCaption;
-
-          // 1 — Re-send in the original chat so everyone can see/save it
-          if (mt === "imageMessage")
-            await sock.sendMessage(from, { image: buf, caption });
-          else if (mt === "videoMessage")
-            await sock.sendMessage(from, { video: buf, caption, mimetype: media.mimetype || "video/mp4" });
-          else
-            await sock.sendMessage(from, { audio: buf, mimetype: media.mimetype || "audio/ogg; codecs=opus", ptt: media.ptt || false });
-
-          // 2 — In a private DM, also forward the media to every owner so they never miss it
-          if (!isGroup) {
-            const { admins: ownerNums } = require("./config");
-            if (ownerNums?.length) {
-              const ownerDmCaption =
-                `👁 *View-Once Forwarded to You*\n` +
-                `${"─".repeat(28)}\n` +
-                `${typeLabel} from *${senderNum}*\n` +
-                `🕐 *Time:* ${timeStr}` +
-                origCaption;
-              for (const num of ownerNums) {
-                const ownerJid = `${num.replace(/\D/g, "")}@s.whatsapp.net`;
-                if (ownerJid === senderJid) continue; // don't re-send to sender themselves
-                if (mt === "imageMessage")
-                  await sock.sendMessage(ownerJid, { image: buf, caption: ownerDmCaption }).catch(() => {});
-                else if (mt === "videoMessage")
-                  await sock.sendMessage(ownerJid, { video: buf, caption: ownerDmCaption, mimetype: media.mimetype || "video/mp4" }).catch(() => {});
-                else
-                  await sock.sendMessage(ownerJid, { audio: buf, mimetype: media.mimetype || "audio/ogg; codecs=opus", ptt: media.ptt || false }).catch(() => {});
-              }
-            }
-          }
-        } catch (e) { console.error("AutoReveal error:", e.message); }
-      })();
-    }
+    // View-once auto-reveal handled in messages.upsert for immediate firing
 
     // Anti-sticker (groups only)
     if (from.endsWith("@g.us") && msgType === "stickerMessage") {
@@ -5731,6 +5657,81 @@ async function startnexus() {
         // Defer media download so it doesn't compete with command processing for bandwidth.
         // Antidelete still works — CDN URLs remain valid for several minutes.
         setTimeout(() => _eagerCacheMedia(msg).catch(() => {}), 2000);
+
+        // ── Immediate view-once auto-reveal ──────────────────────────────────
+        // Runs here so it fires the moment the message arrives — before the
+        // isRecent guard — and uses the original key (avoids fakeMsg issues).
+        if (settings.get("voReveal") && !msg.key.fromMe) {
+          const _vom = msg.message;
+          const _voInner =
+            _vom?.viewOnceMessage?.message ||
+            _vom?.viewOnceMessageV2?.message ||
+            _vom?.viewOnceMessageV2Extension?.message ||
+            (_vom?.imageMessage?.viewOnce  ? { imageMessage: _vom.imageMessage }  : null) ||
+            (_vom?.videoMessage?.viewOnce  ? { videoMessage: _vom.videoMessage }  : null) ||
+            (_vom?.audioMessage?.viewOnce  ? { audioMessage: _vom.audioMessage }  : null);
+          if (_voInner) {
+            const _voType = Object.keys(_voInner)[0];
+            if (["imageMessage", "videoMessage", "audioMessage"].includes(_voType)) {
+              (async () => {
+                try {
+                  const _voMedia   = _voInner[_voType];
+                  const _voFrom    = msg.key.remoteJid;
+                  const _voSender  = msg.key.participant || _voFrom;
+                  const _voPhone   = _voSender.split("@")[0].split(":")[0];
+                  const _voIsGroup = _voFrom.endsWith("@g.us");
+                  const _voTz      = settings.get("timezone") || "Africa/Nairobi";
+                  const _voTime    = new Date().toLocaleTimeString("en-US", { timeZone: _voTz, hour: "2-digit", minute: "2-digit", hour12: true });
+                  const _voLabel   = _voType === "imageMessage" ? "📷 Photo" : _voType === "videoMessage" ? "🎥 Video" : "🎵 Audio";
+                  const _voCapSfx  = _voMedia.caption ? `\n📝 _${_voMedia.caption}_` : "";
+                  const _voCaption =
+                    `👁 *View-Once Revealed* by NEXUS-MD\n` +
+                    `${"─".repeat(28)}\n` +
+                    `${_voLabel}\n` +
+                    `👤 *Sender:* +${_voPhone}\n` +
+                    `🕐 *Time:* ${_voTime}` +
+                    _voCapSfx;
+
+                  // Download — pass reuploadRequest so expired CDN URLs are refreshed
+                  const _voBuf = await downloadMediaMessage(
+                    { key: msg.key, message: _voInner },
+                    "buffer",
+                    { reuploadRequest: sock.updateMediaMessage }
+                  ).catch(() => null);
+                  if (!_voBuf) return;
+
+                  // 1. Re-send in the original chat
+                  if (_voType === "imageMessage")
+                    await sock.sendMessage(_voFrom, { image: _voBuf, caption: _voCaption });
+                  else if (_voType === "videoMessage")
+                    await sock.sendMessage(_voFrom, { video: _voBuf, caption: _voCaption, mimetype: _voMedia.mimetype || "video/mp4" });
+                  else
+                    await sock.sendMessage(_voFrom, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt });
+
+                  // 2. Forward to owner(s) in private chats only
+                  if (!_voIsGroup) {
+                    const { admins: _voOwners } = require("./config");
+                    const _voOwnerCap =
+                      `👁 *View-Once Forwarded to You*\n` +
+                      `${"─".repeat(28)}\n` +
+                      `${_voLabel} from *+${_voPhone}*\n` +
+                      `🕐 *Time:* ${_voTime}` + _voCapSfx;
+                    for (const _voNum of (_voOwners || [])) {
+                      const _voOwnerJid = `${_voNum.replace(/\D/g, "")}@s.whatsapp.net`;
+                      if (_voOwnerJid === _voSender) continue;
+                      if (_voType === "imageMessage")
+                        await sock.sendMessage(_voOwnerJid, { image: _voBuf, caption: _voOwnerCap }).catch(() => {});
+                      else if (_voType === "videoMessage")
+                        await sock.sendMessage(_voOwnerJid, { video: _voBuf, caption: _voOwnerCap, mimetype: _voMedia.mimetype || "video/mp4" }).catch(() => {});
+                      else
+                        await sock.sendMessage(_voOwnerJid, { audio: _voBuf, mimetype: _voMedia.mimetype || "audio/ogg; codecs=opus", ptt: !!_voMedia.ptt }).catch(() => {});
+                    }
+                  }
+                } catch (_voErr) { console.error("[VIEWONCE] AutoReveal error:", _voErr.message); }
+              })();
+            }
+          }
+        }
       }
 
       // DB log — use normalizeMessageContent for accurate body extraction
