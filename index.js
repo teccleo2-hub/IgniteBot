@@ -583,22 +583,25 @@ _server.on("error", (err) => {
 // APP_URL is auto-detected from HEROKU_APP_NAME (set by dyno-metadata feature)
 // so no manual input is needed. Override with APP_URL env var if needed.
 (function startKeepAlive() {
-  // Auto-detect: APP_URL override → HEROKU_APP_NAME (dyno metadata) → disabled
+  // Auto-detect: APP_URL override → Replit dev domain → HEROKU_APP_NAME → disabled
   const appUrl =
     process.env.APP_URL ||
+    (process.env.REPLIT_DEV_DOMAIN
+      ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+      : null) ||
     (process.env.HEROKU_APP_NAME
       ? `https://${process.env.HEROKU_APP_NAME}.herokuapp.com`
       : null);
   const plat = platform.get();
   if (!appUrl || !plat.isSleepy) return;
-  const INTERVAL = 14 * 60 * 1000; // 14 minutes
+  const INTERVAL = 4 * 60 * 1000; // 4 minutes — keep Replit awake
   setInterval(async () => {
     try {
       await axios.get(appUrl, { timeout: 10000 });
       console.log(`💓 Keep-alive ping → ${appUrl}`);
-    } catch { /* silent — dyno still alive */ }
+    } catch { /* silent — still alive */ }
   }, INTERVAL);
-  console.log(`💓 Keep-alive enabled (pinging ${appUrl} every 14 min)`);
+  console.log(`💓 Keep-alive enabled (pinging ${appUrl} every 4 min)`);
 })();
 
 // ── Graceful shutdown (SIGTERM from panel stop / Heroku restart) ─────────────
@@ -914,7 +917,12 @@ async function startnexus() {
     generateHighQualityLinkPreview: false,
     shouldIgnoreJid: (jid) => isJidBroadcast(jid) && jid !== "status@broadcast",
     markOnlineOnConnect: true,
-    retryRequestDelayMs: 2000,
+    retryRequestDelayMs: 250,           // reduced from 2000 for instant retries
+    connectTimeoutMs: 20000,            // fail-fast on slow connections
+    keepAliveIntervalMs: 15000,         // WA WebSocket keepalive every 15s
+    maxMsgRetryCount: 3,                // limit retry storms
+    syncFullHistory: false,             // don't sync old message history on connect
+    fireInitQueries: true,
     getMessage: async (key) => {
       return _msgCache.get(key.id) || undefined;
     },
@@ -1117,7 +1125,7 @@ async function startnexus() {
           currentSessionId = sid;
           try { db.write("_latestSession", { id: sid }); } catch {}
         }
-      }, 10000);  // every 10 s — reduces the stale-key window from 30 s to 10 s
+      }, 30000);  // every 30 s — avoids DB lag spikes from frequent writes
     }
   });
 
