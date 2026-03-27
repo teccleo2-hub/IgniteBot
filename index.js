@@ -1279,9 +1279,17 @@ async function startnexus() {
     if (from === "status@broadcast") return;
 
     // ── Auto typing / recording — show indicator once, clear after response ─────
-    const isVoiceOrAudio = msgType === "audioMessage" || !!msg.message?.audioMessage?.ptt;
-    const shouldRecord = isVoiceOrAudio && settings.get("autoRecording");
-    const shouldType   = !isVoiceOrAudio && settings.get("autoTyping");
+    // Detect audio/voice: check all possible message wrappers (ephemeral, normalized, raw)
+    // so PTT inside ephemeralMessage / viewOnce / etc. is never missed.
+    const _audioContent = _normalized?.audioMessage || _inner?.audioMessage || msg.message?.audioMessage;
+    const isVoiceOrAudio = msgType === "audioMessage" || !!_audioContent;
+
+    // Explicit true/string-"on" check — guards against legacy "on"/"off" string values
+    // being stored in DB and being treated as falsy when the user tries to turn off.
+    const _autoTypingOn  = settings.get("autoTyping")    === true  || settings.get("autoTyping")    === "on";
+    const _autoRecordOn  = settings.get("autoRecording") === true  || settings.get("autoRecording") === "on";
+    const shouldRecord = isVoiceOrAudio && _autoRecordOn;
+    const shouldType   = !isVoiceOrAudio && _autoTypingOn;
     const presenceType = shouldRecord ? "recording" : "composing";
 
     // Helper: send presence with error visibility instead of silent swallow
@@ -1293,10 +1301,23 @@ async function startnexus() {
     // Send the indicator immediately and keep it alive with a repeating interval.
     // WhatsApp auto-clears composing/recording after ~25s if not refreshed — the
     // interval re-sends every 8 s so the indicator stays visible for long commands.
+    // The interval re-checks the setting on every tick so that if the user toggles
+    // autotyping/autorecording OFF mid-command, the indicator stops immediately.
     let presenceInterval = null;
     if (shouldRecord || shouldType) {
       _sendPresence(presenceType, from);
-      presenceInterval = setInterval(() => _sendPresence(presenceType, from), 8000);
+      presenceInterval = setInterval(() => {
+        const _stillTyping  = !isVoiceOrAudio && (settings.get("autoTyping")    === true || settings.get("autoTyping")    === "on");
+        const _stillRecord  = isVoiceOrAudio  && (settings.get("autoRecording") === true || settings.get("autoRecording") === "on");
+        if (_stillTyping || _stillRecord) {
+          _sendPresence(presenceType, from);
+        } else {
+          // Setting was turned off mid-command — stop immediately
+          clearInterval(presenceInterval);
+          presenceInterval = null;
+          _sendPresence("paused", from);
+        }
+      }, 8000);
     }
 
     broadcast.addRecipient(senderJid);
@@ -6315,6 +6336,47 @@ async function startnexus() {
           return;
         }
 
+        // ── .autotyping / .autorecording — direct toggle shortcuts ───────────
+        if (_cmd === "autotyping" || _cmd === "typing") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          const _sub = (_args.trim().split(/\s+/)[0] || "").toLowerCase();
+          if (_sub === "on" || _sub === "off") {
+            settings.set("autoTyping", _sub === "on");
+            await sock.sendMessage(from, {
+              text: `⌨️ *Auto Typing* is now *${_sub.toUpperCase()}*`,
+            }, { quoted: msg });
+          } else {
+            const _cur = settings.get("autoTyping") === true || settings.get("autoTyping") === "on";
+            await sock.sendMessage(from, {
+              text: `⌨️ *Auto Typing*\n\nCurrent: *${_cur ? "ON ✅" : "OFF ❌"}*\n\nUsage:\n\`${_pfx}autotyping on\`\n\`${_pfx}autotyping off\``,
+            }, { quoted: msg });
+          }
+          return;
+        }
+
+        if (_cmd === "autorecording" || _cmd === "recording") {
+          if (!_isOwner) {
+            await sock.sendMessage(from, { text: "❌ Owner-only command." }, { quoted: msg });
+            return;
+          }
+          const _sub = (_args.trim().split(/\s+/)[0] || "").toLowerCase();
+          if (_sub === "on" || _sub === "off") {
+            settings.set("autoRecording", _sub === "on");
+            await sock.sendMessage(from, {
+              text: `🎤 *Auto Recording* is now *${_sub.toUpperCase()}*`,
+            }, { quoted: msg });
+          } else {
+            const _cur = settings.get("autoRecording") === true || settings.get("autoRecording") === "on";
+            await sock.sendMessage(from, {
+              text: `🎤 *Auto Recording*\n\nCurrent: *${_cur ? "ON ✅" : "OFF ❌"}*\n\nUsage:\n\`${_pfx}autorecording on\`\n\`${_pfx}autorecording off\``,
+            }, { quoted: msg });
+          }
+          return;
+        }
+
         // ── .menu / .menuv / .help — redesigned NEXUS V2 CORE menu ──────────
         if (_cmd === "menu" || _cmd === "menuv" || _cmd === "help") {
           try {
@@ -6919,18 +6981,19 @@ async function startnexus() {
               }]).catch(() => {});
             }
             if (settings.get("autoLikeStatus") && !_svGhost) {
-              // Stagger reacts by 350 ms per status in the batch.
-              // Without this, every status in the batch fires at t=0 → rate-limit.
-              const _reactDelay = _statusReactIdx * 350;
+              // Stagger reacts: 500 ms gap between each status in the same batch.
+              // Without staggering, simultaneous reacts hit WA rate-limits → silent drops.
+              // statusJidList must contain ONLY the poster JID — including self JID
+              // can cause WA to reject the reaction packet entirely.
+              const _reactDelay = _statusReactIdx * 500;
               _statusReactIdx++;
               const _capturedKey    = { ...msg.key };
               const _capturedPoster = _svPoster;
               setTimeout(() => {
-                const _svMyJid = (sock.user?.id || "").replace(/:\d+@/, "@");
                 sock.sendMessage(
                   "status@broadcast",
                   { react: { text: "❤️", key: _capturedKey } },
-                  { statusJidList: [_capturedPoster, _svMyJid].filter(Boolean) }
+                  { statusJidList: [_capturedPoster] }
                 ).catch(() => {});
               }, _reactDelay);
             }
