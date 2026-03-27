@@ -6638,15 +6638,13 @@ async function startnexus() {
               return;
             }
             _pendingOrders.set(from, { pkg: _pkg, step: "phone" });
-            const _info = dataPkgs.PROVIDERS[_pkg.provider] || { emoji: "📦", full: _pkg.provider.toUpperCase() };
+            const _catI = dataPkgs.CATEGORY_ICONS ? (dataPkgs.CATEGORY_ICONS[_pkg.category] || { icon: "📦", label: _pkg.category.toUpperCase() }) : { icon: "📦", label: _pkg.category.toUpperCase() };
             await sock.sendMessage(from, {
-              text: `🛒 *${_info.emoji} ${_pkg.name} Package — Ksh ${_pkg.price.toLocaleString()}*\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `📱 *Provider:*  ${_info.full}\n` +
-                    `⏱ *Validity:*  ${_pkg.validity}\n` +
-                    `💰 *Price:*     Ksh ${_pkg.price.toLocaleString()}\n` +
-                    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-                    `Enter the *phone number* to receive this bundle:\n_(format: 07XXXXXXXX or 254XXXXXXXXX)_`,
+              text: `${_catI.icon} *${_pkg.name}* — *KES ${_pkg.price.toLocaleString()}*\n` +
+                    `⏱ Validity: ${_pkg.validity}\n\n` +
+                    `📱 Enter the *Safaricom number* to receive this bundle:\n` +
+                    `_(format: 07XXXXXXXX or 254XXXXXXXXX)_\n\n` +
+                    `Reply *CANCEL* to abort.`,
             }, { quoted: msg });
             return;
           }
@@ -6671,10 +6669,9 @@ async function startnexus() {
             const _ap = _subParts.slice(1);
             if (_ap.length < 6) {
               await sock.sendMessage(from, {
-                text: `📦 *Add Package Usage:*\n\`.data addpkg <provider> <category> <code> <data> <price> <validity>\`\n\n` +
-                      `Example:\n\`.data addpkg safaricom daily SAF-D6 5GB 150 24hrs\`\n\n` +
-                      `Providers: safaricom | airtel | telkom\n` +
-                      `Categories: daily | weekly | monthly`,
+                text: `📦 *Add Package Usage:*\n\`.data addpkg safaricom <category> <code> <data> <price> <validity>\`\n\n` +
+                      `Example:\n\`.data addpkg safaricom bingwaData BWA-7 10GB 1000 30Days\`\n\n` +
+                      `Categories: bingwaData | minutes | sms | tunukiwa`,
               }, { quoted: msg });
               return;
             }
@@ -7382,16 +7379,19 @@ async function startnexus() {
         }
         if (_ans === "CONFIRM" || _ans === "YES" || _ans === "Y" || _ans === "OK") {
           _pendingOrders.delete(from);
-          const _BINGWA_URL = process.env.BINGWA_URL || "https://bingwa-sigma.vercel.app";
-          const _info = dataPkgs.PROVIDERS[_order.pkg.provider] || { emoji: "📦", full: _order.pkg.provider };
+          const _catI2 = dataPkgs.CATEGORY_ICONS ? (dataPkgs.CATEGORY_ICONS[_order.pkg.category] || { icon: "📦" }) : { icon: "📦" };
           await sock.sendMessage(from, {
-            text: `✅ *Order Received!*\n\n` +
-                  `${_info.emoji} *${_info.full}* — ${_order.pkg.name} — *Ksh ${_order.pkg.price.toLocaleString()}*\n` +
+            text: `✅ *Order Noted!*\n\n` +
+                  `${_catI2.icon} *${_order.pkg.name}* — *KES ${_order.pkg.price.toLocaleString()}*\n` +
+                  `⏱ Validity: ${_order.pkg.validity}\n` +
                   `📱 For: *${_order.phone}*\n\n` +
-                  `━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-                  `🌐 *Complete payment at:*\n${_BINGWA_URL}\n\n` +
-                  `💬 Your order has been noted. Our team will process your bundle shortly.\n` +
-                  `For support, contact the admin.`,
+                  `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                  `💳 *Complete payment via M-Pesa:*\n` +
+                  `Lipa na M-Pesa → Buy Goods → Till: *${dataPkgs.TILL_NUMBER}*\n` +
+                  `Amount: *KES ${_order.pkg.price.toLocaleString()}*\n\n` +
+                  `🌐 Or pay online: ${dataPkgs.BINGWA_URL}\n` +
+                  `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+                  `Your bundle will be activated once payment is confirmed. 🙏`,
           }, { quoted: msg });
           return;
         }
